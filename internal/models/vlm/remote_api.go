@@ -40,10 +40,11 @@ func vlmHTTPTimeout() time.Duration {
 
 // RemoteAPIVLM implements VLM via an OpenAI-compatible chat completions API.
 type RemoteAPIVLM struct {
-	modelName string
-	modelID   string
-	client    *openai.Client
-	baseURL   string
+	modelName   string
+	modelID     string
+	client      *openai.Client
+	baseURL     string
+	imageDetail openai.ImageURLDetail
 }
 
 // NewRemoteAPIVLM creates a remote-API backed VLM instance.
@@ -82,10 +83,11 @@ func NewRemoteAPIVLM(config *Config) (*RemoteAPIVLM, error) {
 	}
 
 	return &RemoteAPIVLM{
-		modelName: config.ModelName,
-		modelID:   config.ModelID,
-		client:    openai.NewClientWithConfig(apiCfg),
-		baseURL:   config.BaseURL,
+		modelName:   config.ModelName,
+		modelID:     config.ModelID,
+		client:      openai.NewClientWithConfig(apiCfg),
+		baseURL:     config.BaseURL,
+		imageDetail: vlmImageDetail(providerName),
 	}, nil
 }
 
@@ -109,7 +111,7 @@ func (v *RemoteAPIVLM) Predict(ctx context.Context, imgBytesList [][]byte, promp
 				Type: openai.ChatMessagePartTypeImageURL,
 				ImageURL: &openai.ChatMessageImageURL{
 					URL:    dataURI,
-					Detail: openai.ImageURLDetailAuto,
+					Detail: v.imageDetail,
 				},
 			})
 		}
@@ -149,6 +151,23 @@ func (v *RemoteAPIVLM) Predict(ctx context.Context, imgBytesList [][]byte, promp
 
 func (v *RemoteAPIVLM) GetModelName() string { return v.modelName }
 func (v *RemoteAPIVLM) GetModelID() string   { return v.modelID }
+
+// vlmImageDetail returns the provider-compatible image detail value.
+//
+// OpenAI accepts "auto", while MiniMax-M3 documents and validates
+// low/default/high. Sending "auto" to MiniMax returns HTTP 400
+// "invalid image detail: auto", which stalls report multimodal processing
+// through retries. Keep an env override for deployments that need a provider
+// specific tuning without rebuilding.
+func vlmImageDetail(providerName provider.ProviderName) openai.ImageURLDetail {
+	if v := strings.TrimSpace(os.Getenv("VLM_IMAGE_DETAIL")); v != "" {
+		return openai.ImageURLDetail(v)
+	}
+	if providerName == provider.ProviderMiniMax {
+		return openai.ImageURLDetail("default")
+	}
+	return openai.ImageURLDetailAuto
+}
 
 // detectImageMIME returns the MIME type for the given image bytes.
 func detectImageMIME(data []byte) string {
