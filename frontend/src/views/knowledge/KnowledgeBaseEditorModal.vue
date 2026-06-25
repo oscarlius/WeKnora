@@ -316,6 +316,23 @@
 
                       <div v-if="formData.multimodalConfig.enabled" class="setting-row">
                         <div class="setting-info">
+                          <label>{{ $t('knowledgeEditor.advanced.multimodal.fallbackVllmLabel') }}</label>
+                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.fallbackVllmDescription') }}</p>
+                        </div>
+                        <div class="setting-control">
+                          <ModelSelector
+                            model-type="VLLM"
+                            :selected-model-id="formData.multimodalConfig.fallbackVllmModelId"
+                            :all-models="allModels"
+                            @update:selected-model-id="(value: string) => { formData.multimodalConfig.fallbackVllmModelId = value }"
+                            @add-model="handleAddVLLMModel"
+                            :placeholder="$t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
+                          />
+                        </div>
+                      </div>
+
+                      <div v-if="formData.multimodalConfig.enabled" class="setting-row">
+                        <div class="setting-info">
                           <label>{{ $t('knowledgeEditor.advanced.multimodal.descriptionLanguageLabel') }}</label>
                           <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.descriptionLanguageDescription') }}</p>
                         </div>
@@ -744,6 +761,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
     multimodalConfig: {
       enabled: false,
       vllmModelId: '',
+      fallbackVllmModelId: '',
       descriptionLanguage: '',
       customInstructions: ''
     },
@@ -867,6 +885,7 @@ const loadKBData = async () => {
       multimodalConfig: {
         enabled: !!kb.vlm_config?.enabled,
         vllmModelId: kb.vlm_config?.model_id || '',
+        fallbackVllmModelId: kb.vlm_config?.fallback_model_id || '',
         descriptionLanguage: kb.vlm_config?.description_language || '',
         customInstructions: kb.vlm_config?.custom_instructions || ''
       },
@@ -1200,6 +1219,9 @@ const buildSubmitData = () => {
     enabled: formData.value.multimodalConfig.enabled,
     model_id: formData.value.multimodalConfig.enabled
       ? (formData.value.multimodalConfig.vllmModelId || '')
+      : '',
+    fallback_model_id: formData.value.multimodalConfig.enabled
+      ? (formData.value.multimodalConfig.fallbackVllmModelId || '')
       : '',
     description_language: formData.value.multimodalConfig.descriptionLanguage || '',
     custom_instructions: formData.value.multimodalConfig.customInstructions || ''

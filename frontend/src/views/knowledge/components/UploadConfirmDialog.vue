@@ -349,6 +349,22 @@
                         </div>
                         <div v-if="uiState.multimodalConfig.enabled" class="setting-row">
                           <div class="setting-info">
+                            <label>{{ t('knowledgeEditor.advanced.multimodal.fallbackVllmLabel') }}</label>
+                            <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.fallbackVllmDescription') }}</p>
+                          </div>
+                          <div class="setting-control">
+                            <ModelSelector
+                              model-type="VLLM"
+                              :selected-model-id="uiState.multimodalConfig.fallbackVllmModelId"
+                              :all-models="allModels"
+                              :placeholder="t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
+                              @update:selected-model-id="(value: string) => { uiState.multimodalConfig.fallbackVllmModelId = value }"
+                              @add-model="handleAddVLLMModel"
+                            />
+                          </div>
+                        </div>
+                        <div v-if="uiState.multimodalConfig.enabled" class="setting-row">
+                          <div class="setting-info">
                             <label>{{ t('knowledgeEditor.advanced.multimodal.descriptionLanguageLabel') }}</label>
                             <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.descriptionLanguageDescription') }}</p>
                           </div>
@@ -556,7 +572,7 @@ interface ChunkingUIConfig {
 
 interface UploadUIState {
   chunkingConfig: ChunkingUIConfig
-  multimodalConfig: { enabled: boolean; vllmModelId: string; descriptionLanguage?: string; customInstructions?: string }
+  multimodalConfig: { enabled: boolean; vllmModelId: string; fallbackVllmModelId: string; descriptionLanguage?: string; customInstructions?: string }
   asrConfig: { enabled: boolean; modelId: string; language: string }
   questionGenerationConfig: { enabled: boolean; questionCount: number; customInstructions?: string }
   nodeExtractConfig: {
@@ -967,7 +983,7 @@ function createDefaultUIState(): UploadUIState {
       languages: [],
       tableMetadataInstructions: '',
     },
-    multimodalConfig: { enabled: false, vllmModelId: '', descriptionLanguage: '', customInstructions: '' },
+    multimodalConfig: { enabled: false, vllmModelId: '', fallbackVllmModelId: '', descriptionLanguage: '', customInstructions: '' },
     asrConfig: { enabled: false, modelId: '', language: '' },
     questionGenerationConfig: { enabled: true, questionCount: 3, customInstructions: '' },
     nodeExtractConfig: {
@@ -1006,6 +1022,7 @@ function initFromKbInfo(kb: any) {
     multimodalConfig: {
       enabled: !!kb.vlm_config?.enabled,
       vllmModelId: kb.vlm_config?.model_id || '',
+      fallbackVllmModelId: kb.vlm_config?.fallback_model_id || '',
       descriptionLanguage: kb.vlm_config?.description_language || '',
       customInstructions: kb.vlm_config?.custom_instructions || '',
     },
@@ -1057,6 +1074,7 @@ function buildProcessOverrides(): KnowledgeProcessOverrides {
     vlm_config: {
       enabled: state.multimodalConfig.enabled,
       model_id: state.multimodalConfig.vllmModelId,
+      fallback_model_id: state.multimodalConfig.enabled ? state.multimodalConfig.fallbackVllmModelId : '',
       description_language: state.multimodalConfig.descriptionLanguage,
       custom_instructions: state.multimodalConfig.customInstructions,
     },
@@ -1112,6 +1130,7 @@ function applyOverridesToState(o?: KnowledgeProcessOverrides | null) {
   if (o.vlm_config) {
     if (o.vlm_config.enabled != null) s.multimodalConfig.enabled = o.vlm_config.enabled
     if (o.vlm_config.model_id != null) s.multimodalConfig.vllmModelId = o.vlm_config.model_id
+    if (o.vlm_config.fallback_model_id != null) s.multimodalConfig.fallbackVllmModelId = o.vlm_config.fallback_model_id
     if (o.vlm_config.description_language != null) s.multimodalConfig.descriptionLanguage = o.vlm_config.description_language
     if (o.vlm_config.custom_instructions != null) s.multimodalConfig.customInstructions = o.vlm_config.custom_instructions
   }

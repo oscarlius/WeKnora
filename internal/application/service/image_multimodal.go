@@ -90,6 +90,23 @@ type ImageMultimodalService struct {
 	spanTracker SpanTracker
 }
 
+type resolvedImageVLM struct {
+	primary         vlm.VLM
+	fallback        vlm.VLM
+	primaryModelID  string
+	fallbackModelID string
+}
+
+type vlmPredictionTrace struct {
+	PrimaryModelID  string
+	FallbackModelID string
+	UsedModelID     string
+	UsedModelName   string
+	FallbackReason  string
+	PrimaryError    string
+	FallbackError   string
+}
+
 func NewImageMultimodalService(
 	chunkService interfaces.ChunkService,
 	modelService interfaces.ModelService,
@@ -224,7 +241,7 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 		}
 	}()
 
-	vlmModel, vlmCfg, err := s.resolveVLM(ctx, payload.KnowledgeBaseID, payload.KnowledgeID)
+	imageVLM, vlmCfg, err := s.resolveVLM(ctx, payload.KnowledgeBaseID, payload.KnowledgeID)
 	if err != nil {
 		handleErr = fmt.Errorf("resolve VLM: %w", err)
 		return handleErr
@@ -233,10 +250,11 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 	// legacy inline-config path) so the trace shows WHICH model handled
 	// this image. Without this, debugging "VLM is slow" requires a
 	// separate hop to the KB config.
-	if id := strings.TrimSpace(vlmCfg.ModelID); id != "" {
+	if id := imageVLM.primaryTraceID(); id != "" {
 		imgOut["vlm_model_id"] = id
-	} else {
-		imgOut["vlm_model_id"] = "legacy_inline"
+	}
+	if id := imageVLM.fallbackTraceID(); id != "" {
+		imgOut["vlm_fallback_model_id"] = id
 	}
 
 	// Read image bytes. A provider:// URL must be resolved via FileService —
@@ -268,7 +286,8 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 		}
 		prompt = types.AppendCustomPromptInstructions(prompt, vlmCfg.CustomInstructions, "image_ocr")
 
-		ocrText, ocrErr := vlmModel.Predict(ctx, [][]byte{imgBytes}, prompt)
+		ocrText, ocrTrace, ocrErr := predictWithVLMFallback(ctx, imageVLM, [][]byte{imgBytes}, prompt)
+		recordVLMTrace(imgOut, "ocr", ocrTrace)
 		if ocrErr != nil {
 			logger.Warnf(ctx, "[ImageMultimodal] OCR failed for %s: %v", payload.ImageURL, ocrErr)
 			imgOut["ocr_error"] = ocrErr.Error()
@@ -286,7 +305,9 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 		}
 	}
 
-	caption, capErr := vlmModel.Predict(ctx, [][]byte{imgBytes}, buildVLMCaptionPrompt(ctx, vlmCfg))
+	captionPrompt := buildVLMCaptionPrompt(ctx, vlmCfg)
+	caption, capTrace, capErr := predictWithVLMFallback(ctx, imageVLM, [][]byte{imgBytes}, captionPrompt)
+	recordVLMTrace(imgOut, "caption", capTrace)
 	if capErr != nil {
 		logger.Warnf(ctx, "[ImageMultimodal] Caption failed for %s: %v", payload.ImageURL, capErr)
 		imgOut["caption_error"] = capErr.Error()
@@ -514,7 +535,7 @@ func (s *ImageMultimodalService) indexChunks(ctx context.Context, payload types.
 // resolveVLM creates a vlm.VLM instance for the given knowledge base,
 // supporting both new-style (ModelID) and legacy (inline BaseURL) configs.
 // Per-upload process_overrides on the knowledge entry take precedence over KB defaults.
-func (s *ImageMultimodalService) resolveVLM(ctx context.Context, kbID, knowledgeID string) (vlm.VLM, types.VLMConfig, error) {
+func (s *ImageMultimodalService) resolveVLM(ctx context.Context, kbID, knowledgeID string) (*resolvedImageVLM, types.VLMConfig, error) {
 	kb, err := s.kbService.GetKnowledgeBaseByIDOnly(ctx, kbID)
 	if err != nil {
 		return nil, types.VLMConfig{}, fmt.Errorf("get knowledge base %s: %w", kbID, err)
@@ -531,18 +552,153 @@ func (s *ImageMultimodalService) resolveVLM(ctx context.Context, kbID, knowledge
 	}
 	vlmCfg := ResolveProcessConfig(kb, processOverrides).VLMConfig
 	if !vlmCfg.IsEnabled() {
-		return nil, types.VLMConfig{}, fmt.Errorf("VLM is not enabled for knowledge base %s", kbID)
+		return nil, vlmCfg, fmt.Errorf("VLM is not enabled for knowledge base %s", kbID)
 	}
 
 	// New-style: resolve model through ModelService
 	if vlmCfg.ModelID != "" {
-		model, err := s.modelService.GetVLMModel(ctx, vlmCfg.ModelID)
-		return model, vlmCfg, err
+		primary, err := s.modelService.GetVLMModel(ctx, vlmCfg.ModelID)
+		if err != nil {
+			return nil, vlmCfg, err
+		}
+		if primary == nil {
+			return nil, vlmCfg, fmt.Errorf("VLM model %s not found", vlmCfg.ModelID)
+		}
+		resolved := &resolvedImageVLM{
+			primary:        primary,
+			primaryModelID: strings.TrimSpace(vlmCfg.ModelID),
+		}
+		fallbackID := strings.TrimSpace(vlmCfg.FallbackModelID)
+		if fallbackID != "" && fallbackID != strings.TrimSpace(vlmCfg.ModelID) {
+			fallback, ferr := s.modelService.GetVLMModel(ctx, fallbackID)
+			if ferr != nil {
+				logger.Warnf(ctx, "[ImageMultimodal] Fallback VLM model %s unavailable: %v", fallbackID, ferr)
+			} else if fallback == nil {
+				logger.Warnf(ctx, "[ImageMultimodal] Fallback VLM model %s resolved to nil", fallbackID)
+			} else {
+				resolved.fallback = fallback
+				resolved.fallbackModelID = fallbackID
+			}
+		}
+		return resolved, vlmCfg, nil
 	}
 
 	// Legacy: create VLM from inline config
 	model, err := vlm.NewVLMFromLegacyConfig(vlmCfg, s.ollamaService)
-	return model, vlmCfg, err
+	if err != nil {
+		return nil, vlmCfg, err
+	}
+	return &resolvedImageVLM{
+		primary:        model,
+		primaryModelID: "legacy_inline",
+	}, vlmCfg, nil
+}
+
+func (v *resolvedImageVLM) primaryTraceID() string {
+	if v == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(v.primaryModelID); id != "" {
+		return id
+	}
+	return modelTraceID(v.primary, "legacy_inline")
+}
+
+func (v *resolvedImageVLM) fallbackTraceID() string {
+	if v == nil || v.fallback == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(v.fallbackModelID); id != "" {
+		return id
+	}
+	return modelTraceID(v.fallback, "")
+}
+
+func modelTraceID(model vlm.VLM, defaultID string) string {
+	if model != nil {
+		if id := strings.TrimSpace(model.GetModelID()); id != "" {
+			return id
+		}
+	}
+	return defaultID
+}
+
+func modelTraceName(model vlm.VLM) string {
+	if model == nil {
+		return ""
+	}
+	return strings.TrimSpace(model.GetModelName())
+}
+
+func predictWithVLMFallback(
+	ctx context.Context,
+	imageVLM *resolvedImageVLM,
+	imgBytesList [][]byte,
+	prompt string,
+) (string, vlmPredictionTrace, error) {
+	trace := vlmPredictionTrace{}
+	if imageVLM == nil || imageVLM.primary == nil {
+		return "", trace, fmt.Errorf("primary VLM is not resolved")
+	}
+
+	trace.PrimaryModelID = imageVLM.primaryTraceID()
+	trace.FallbackModelID = imageVLM.fallbackTraceID()
+
+	text, err := imageVLM.primary.Predict(ctx, imgBytesList, prompt)
+	if err == nil {
+		trace.UsedModelID = trace.PrimaryModelID
+		trace.UsedModelName = modelTraceName(imageVLM.primary)
+		return text, trace, nil
+	}
+
+	trace.PrimaryError = err.Error()
+	if imageVLM.fallback == nil {
+		trace.UsedModelID = trace.PrimaryModelID
+		trace.UsedModelName = modelTraceName(imageVLM.primary)
+		return "", trace, err
+	}
+
+	trace.FallbackReason = err.Error()
+	fallbackText, fallbackErr := imageVLM.fallback.Predict(ctx, imgBytesList, prompt)
+	if fallbackErr != nil {
+		trace.FallbackError = fallbackErr.Error()
+		return "", trace, fmt.Errorf("primary VLM failed: %w; fallback VLM failed: %v", err, fallbackErr)
+	}
+
+	trace.UsedModelID = trace.FallbackModelID
+	trace.UsedModelName = modelTraceName(imageVLM.fallback)
+	return fallbackText, trace, nil
+}
+
+func recordVLMTrace(out types.JSONMap, prefix string, trace vlmPredictionTrace) {
+	if out == nil || prefix == "" {
+		return
+	}
+	if trace.PrimaryModelID != "" {
+		out[prefix+"_vlm_model_id"] = trace.PrimaryModelID
+	}
+	if trace.FallbackModelID != "" {
+		out["vlm_fallback_model_id"] = trace.FallbackModelID
+		out[prefix+"_vlm_fallback_model_id"] = trace.FallbackModelID
+	}
+	if trace.UsedModelID != "" {
+		out["vlm_used_model_id"] = trace.UsedModelID
+		out[prefix+"_vlm_used_model_id"] = trace.UsedModelID
+	}
+	if trace.UsedModelName != "" {
+		out[prefix+"_vlm_used_model_name"] = trace.UsedModelName
+	}
+	if trace.FallbackReason != "" {
+		reason := previewText(trace.FallbackReason, 300)
+		out["vlm_fallback_reason"] = reason
+		out[prefix+"_vlm_fallback_reason"] = reason
+	}
+	if trace.PrimaryError != "" {
+		out[prefix+"_vlm_primary_error"] = previewText(trace.PrimaryError, 300)
+	}
+	if trace.FallbackError != "" {
+		out[prefix+"_vlm_fallback_error"] = previewText(trace.FallbackError, 300)
+	}
 }
 
 // resolveFileServiceForPayload resolves tenant/KB scoped file service for reading provider:// URLs.

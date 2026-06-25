@@ -453,15 +453,15 @@ func (c *ImageProcessingConfig) Scan(value interface{}) error {
 
 // VLMConfig represents the VLM configuration
 type VLMConfig struct {
-	Enabled bool   `yaml:"enabled"  json:"enabled"`
-	ModelID string `yaml:"model_id" json:"model_id"`
+	Enabled         bool   `yaml:"enabled"           json:"enabled"`
+	ModelID         string `yaml:"model_id"          json:"model_id"`
+	FallbackModelID string `yaml:"fallback_model_id" json:"fallback_model_id"`
 	// DescriptionLanguage controls the language used for generated image
 	// captions. Empty means follow the document/request language.
 	DescriptionLanguage string `yaml:"description_language,omitempty" json:"description_language,omitempty"`
 	// CustomInstructions adds KB-specific image interpretation guidance without
 	// replacing the system-owned OCR and Markdown output contract.
 	CustomInstructions string `yaml:"custom_instructions,omitempty" json:"custom_instructions,omitempty"`
-
 	// 兼容老版本
 	// Model Name
 	ModelName string `yaml:"model_name" json:"model_name"`

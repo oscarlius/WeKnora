@@ -111,6 +111,7 @@ export interface KBModelConfigRequest {
         model_id?: string
         description_language?: string
         custom_instructions?: string
+        fallback_model_id?: string
     }
     asr_config?: {
         enabled: boolean

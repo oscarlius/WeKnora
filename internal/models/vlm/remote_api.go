@@ -40,12 +40,13 @@ func vlmHTTPTimeout() time.Duration {
 
 // RemoteAPIVLM implements VLM via an OpenAI-compatible chat completions API.
 type RemoteAPIVLM struct {
-	modelName   string
-	modelID     string
-	client      *openai.Client
-	baseURL     string
-	temperature float32
-	imageDetail openai.ImageURLDetail
+	modelName       string
+	modelID         string
+	client          *openai.Client
+	baseURL         string
+	temperature     float32
+	imageDetail     openai.ImageURLDetail
+	sendImageDetail bool
 }
 
 // NewRemoteAPIVLM creates a remote-API backed VLM instance.
@@ -98,13 +99,15 @@ func NewRemoteAPIVLM(config *Config) (*RemoteAPIVLM, error) {
 		}
 	}
 
+	imageDetail, sendImageDetail := vlmImageDetail(providerName)
 	return &RemoteAPIVLM{
-		modelName:   config.ModelName,
-		modelID:     config.ModelID,
-		client:      openai.NewClientWithConfig(apiCfg),
-		baseURL:     config.BaseURL,
-		temperature: temp,
-		imageDetail: vlmImageDetail(providerName),
+		modelName:       config.ModelName,
+		modelID:         config.ModelID,
+		client:          openai.NewClientWithConfig(apiCfg),
+		baseURL:         config.BaseURL,
+		temperature:     temp,
+		imageDetail:     imageDetail,
+		sendImageDetail: sendImageDetail,
 	}, nil
 }
 
@@ -124,12 +127,15 @@ func (v *RemoteAPIVLM) Predict(ctx context.Context, imgBytesList [][]byte, promp
 			mimeType := detectImageMIME(imgBytes)
 			b64 := base64.StdEncoding.EncodeToString(imgBytes)
 			dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, b64)
+			imageURL := &openai.ChatMessageImageURL{
+				URL: dataURI,
+			}
+			if v.sendImageDetail {
+				imageURL.Detail = v.imageDetail
+			}
 			parts = append(parts, openai.ChatMessagePart{
-				Type: openai.ChatMessagePartTypeImageURL,
-				ImageURL: &openai.ChatMessageImageURL{
-					URL:    dataURI,
-					Detail: v.imageDetail,
-				},
+				Type:     openai.ChatMessagePartTypeImageURL,
+				ImageURL: imageURL,
 			})
 		}
 	}
@@ -171,19 +177,25 @@ func (v *RemoteAPIVLM) GetModelID() string   { return v.modelID }
 
 // vlmImageDetail returns the provider-compatible image detail value.
 //
-// OpenAI accepts "auto", while MiniMax-M3 documents and validates
-// low/default/high. Sending "auto" to MiniMax returns HTTP 400
-// "invalid image detail: auto", which stalls report multimodal processing
-// through retries. Keep an env override for deployments that need a provider
-// specific tuning without rebuilding.
-func vlmImageDetail(providerName provider.ProviderName) openai.ImageURLDetail {
+// OpenAI accepts "auto", but several OpenAI-compatible VLM providers
+// (MiniMax, iFLYTEK and others) reject it with HTTP 400
+// "invalid image detail: auto". For compatibility, only send detail by
+// default to known OpenAI endpoints. Other providers omit the field and let
+// the upstream choose its default. Keep an env override for deployments that
+// need provider-specific tuning without rebuilding.
+func vlmImageDetail(providerName provider.ProviderName) (openai.ImageURLDetail, bool) {
 	if v := strings.TrimSpace(os.Getenv("VLM_IMAGE_DETAIL")); v != "" {
-		return openai.ImageURLDetail(v)
+		if strings.EqualFold(v, "omit") || strings.EqualFold(v, "none") || strings.EqualFold(v, "disabled") {
+			return "", false
+		}
+		return openai.ImageURLDetail(v), true
 	}
-	if providerName == provider.ProviderMiniMax {
-		return openai.ImageURLDetail("default")
+	switch providerName {
+	case provider.ProviderOpenAI, provider.ProviderAzureOpenAI:
+		return openai.ImageURLDetailAuto, true
+	default:
+		return "", false
 	}
-	return openai.ImageURLDetailAuto
 }
 
 // detectImageMIME returns the MIME type for the given image bytes.
