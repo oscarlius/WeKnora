@@ -107,6 +107,14 @@ func (s *knowledgeBaseService) CreateKnowledgeBase(ctx context.Context,
 		kb.CreatorID = uid
 	}
 	kb.EnsureDefaults()
+	kb.VLMConfig.ModelID = strings.TrimSpace(kb.VLMConfig.ModelID)
+	kb.VLMConfig.FallbackModelID = strings.TrimSpace(kb.VLMConfig.FallbackModelID)
+	if !kb.VLMConfig.Enabled {
+		kb.VLMConfig.ModelID = ""
+		kb.VLMConfig.FallbackModelID = ""
+	} else if kb.VLMConfig.FallbackModelID == kb.VLMConfig.ModelID {
+		kb.VLMConfig.FallbackModelID = ""
+	}
 	applyTenantDefaultStorageProvider(ctx, kb)
 
 	// Fold empty-string vector_store_id into nil so this path and the

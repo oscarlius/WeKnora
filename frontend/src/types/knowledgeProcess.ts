@@ -21,6 +21,7 @@ export interface ChunkingConfigOverride {
 export interface VLMConfigOverride {
   enabled?: boolean
   model_id?: string
+  fallback_model_id?: string
 }
 
 export interface ASRConfigOverride {

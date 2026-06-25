@@ -294,10 +294,20 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 		} else {
 			kb.VLMConfig.Enabled = req.VLMConfig.Enabled
 			kb.VLMConfig.ModelID = req.VLMConfig.ModelID
+			fallbackModelID := strings.TrimSpace(req.VLMConfig.FallbackModelID)
+			if fallbackModelID != "" && fallbackModelID != req.VLMConfig.ModelID {
+				fallbackModel, ferr := h.modelService.GetModelByID(ctx, fallbackModelID)
+				if ferr != nil || fallbackModel == nil {
+					logger.Warn(ctx, "Fallback VLM model not found")
+				} else {
+					kb.VLMConfig.FallbackModelID = fallbackModelID
+				}
+			}
 		}
 	}
 	if !kb.VLMConfig.Enabled {
 		kb.VLMConfig.ModelID = ""
+		kb.VLMConfig.FallbackModelID = ""
 	}
 
 	// 处理ASR语音识别配置
@@ -349,6 +359,7 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 		// VLM model already set above
 	} else {
 		kb.VLMConfig.ModelID = ""
+		kb.VLMConfig.FallbackModelID = ""
 	}
 
 	// 存储引擎：仅写入 provider 到新字段，参数从租户全局 StorageEngineConfig 读取
@@ -1336,6 +1347,7 @@ func (h *InitializationHandler) GetCurrentConfigByKB(c *gin.Context) {
 		kb.EmbeddingModelID,
 		kb.SummaryModelID,
 		kb.VLMConfig.ModelID,
+		kb.VLMConfig.FallbackModelID,
 	}
 
 	for _, modelID := range modelIDs {

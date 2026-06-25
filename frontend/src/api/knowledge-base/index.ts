@@ -68,6 +68,7 @@ export function createKnowledgeBase(data: {
   vlm_config?: {
     enabled: boolean;
     model_id?: string;
+    fallback_model_id?: string;
   };
   storage_provider_config?: { provider: string };
   storage_config?: any; // legacy, kept for backward compat (dual-write)

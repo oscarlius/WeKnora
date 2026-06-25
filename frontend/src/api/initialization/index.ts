@@ -88,6 +88,7 @@ export interface KBModelConfigRequest {
     vlm_config?: {
         enabled: boolean
         model_id?: string
+        fallback_model_id?: string
     }
     asr_config?: {
         enabled: boolean

@@ -99,6 +99,7 @@ func TestResolveProcessConfig_NilOverridesUsesKBDefaults(t *testing.T) {
 	require.Equal(t, 50, eff.ChunkingConfig.ChunkOverlap)
 	require.True(t, eff.EnableMultimodel)
 	require.Equal(t, "vlm-1", eff.VLMConfig.ModelID)
+	require.Empty(t, eff.VLMConfig.FallbackModelID)
 	require.Equal(t, "asr-1", eff.ASRConfig.ModelID)
 	require.True(t, eff.QuestionGenerationConfig.Enabled)
 	require.Equal(t, 3, eff.QuestionGenerationConfig.QuestionCount)
@@ -175,6 +176,24 @@ func TestResolveProcessConfig_EnableMultimodelOverride(t *testing.T) {
 	}
 	eff := ResolveProcessConfig(kb, overrides)
 	require.False(t, eff.EnableMultimodel)
+}
+
+func TestResolveProcessConfig_VLMFallbackOverride(t *testing.T) {
+	t.Parallel()
+
+	kb := &types.KnowledgeBase{
+		VLMConfig: types.VLMConfig{Enabled: true, ModelID: "vlm-primary", FallbackModelID: "vlm-local"},
+	}
+	eff := ResolveProcessConfig(kb, nil)
+	require.Equal(t, "vlm-primary", eff.VLMConfig.ModelID)
+	require.Equal(t, "vlm-local", eff.VLMConfig.FallbackModelID)
+
+	overrides := &types.KnowledgeProcessOverrides{
+		VLMConfig: &types.VLMConfig{Enabled: true, ModelID: "vlm-upload", FallbackModelID: "vlm-upload-local"},
+	}
+	eff = ResolveProcessConfig(kb, overrides)
+	require.Equal(t, "vlm-upload", eff.VLMConfig.ModelID)
+	require.Equal(t, "vlm-upload-local", eff.VLMConfig.FallbackModelID)
 }
 
 func TestResolveProcessConfig_ExtractConfigFieldMerge(t *testing.T) {

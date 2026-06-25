@@ -289,6 +289,23 @@
                           />
                         </div>
                       </div>
+
+                      <div v-if="formData.multimodalConfig.enabled" class="setting-row">
+                        <div class="setting-info">
+                          <label>{{ $t('knowledgeEditor.advanced.multimodal.fallbackVllmLabel') }}</label>
+                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.fallbackVllmDescription') }}</p>
+                        </div>
+                        <div class="setting-control">
+                          <ModelSelector
+                            model-type="VLLM"
+                            :selected-model-id="formData.multimodalConfig.fallbackVllmModelId"
+                            :all-models="allModels"
+                            @update:selected-model-id="handleMultimodalFallbackVLLMChange"
+                            @add-model="handleAddVLLMModel"
+                            :placeholder="$t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -661,7 +678,8 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
     storageProvider: '' as string,
     multimodalConfig: {
       enabled: false,
-      vllmModelId: ''
+      vllmModelId: '',
+      fallbackVllmModelId: ''
     },
     asrConfig: {
       enabled: false,
@@ -775,7 +793,8 @@ const loadKBData = async () => {
       storageProvider: (kb.storage_provider_config?.provider || kb.storage_config?.provider || 'local') as string,
       multimodalConfig: {
         enabled: !!kb.vlm_config?.enabled,
-        vllmModelId: kb.vlm_config?.model_id || ''
+        vllmModelId: kb.vlm_config?.model_id || '',
+        fallbackVllmModelId: kb.vlm_config?.fallback_model_id || ''
       },
       asrConfig: {
         enabled: !!kb.asr_config?.enabled,
@@ -930,12 +949,23 @@ const handleParserEngineRulesUpdate = (rules: any[]) => {
 const handleMultimodalToggle = () => {
   if (formData.value && !formData.value.multimodalConfig.enabled) {
     formData.value.multimodalConfig.vllmModelId = ''
+    formData.value.multimodalConfig.fallbackVllmModelId = ''
   }
 }
 
 const handleMultimodalVLLMChange = (modelId: string) => {
   if (formData.value) {
     formData.value.multimodalConfig.vllmModelId = modelId
+    if (formData.value.multimodalConfig.fallbackVllmModelId === modelId) {
+      formData.value.multimodalConfig.fallbackVllmModelId = ''
+    }
+  }
+}
+
+const handleMultimodalFallbackVLLMChange = (modelId: string) => {
+  if (formData.value) {
+    formData.value.multimodalConfig.fallbackVllmModelId =
+      modelId === formData.value.multimodalConfig.vllmModelId ? '' : modelId
   }
 }
 
@@ -1089,6 +1119,9 @@ const buildSubmitData = () => {
     enabled: formData.value.multimodalConfig.enabled,
     model_id: formData.value.multimodalConfig.enabled
       ? (formData.value.multimodalConfig.vllmModelId || '')
+      : '',
+    fallback_model_id: formData.value.multimodalConfig.enabled
+      ? (formData.value.multimodalConfig.fallbackVllmModelId || '')
       : ''
   }
 

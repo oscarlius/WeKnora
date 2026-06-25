@@ -165,6 +165,22 @@
                           </p>
                         </div>
                       </div>
+                      <div v-if="uiState.multimodalConfig.enabled" class="setting-row setting-row--field">
+                        <div class="setting-info">
+                          <label>{{ t('knowledgeEditor.advanced.multimodal.fallbackVllmLabel') }}</label>
+                          <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.fallbackVllmDescription') }}</p>
+                        </div>
+                        <div class="setting-control setting-control--full">
+                          <ModelSelector
+                            model-type="VLLM"
+                            :selected-model-id="uiState.multimodalConfig.fallbackVllmModelId"
+                            :all-models="allModels"
+                            :placeholder="t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
+                            @update:selected-model-id="handleMultimodalFallbackVLLMChange"
+                            @add-model="handleAddVLLMModel"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <div v-show="activeSection === 'asr'" class="section">
@@ -240,7 +256,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, withDefaults } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import ModelSelector from '@/components/ModelSelector.vue'
@@ -279,7 +295,7 @@ interface ChunkingUIConfig {
 
 interface UploadUIState {
   chunkingConfig: ChunkingUIConfig
-  multimodalConfig: { enabled: boolean; vllmModelId: string }
+  multimodalConfig: { enabled: boolean; vllmModelId: string; fallbackVllmModelId: string }
   asrConfig: { enabled: boolean; modelId: string; language: string }
   questionGenerationConfig: { enabled: boolean; questionCount: number }
   nodeExtractConfig: {
@@ -483,7 +499,11 @@ const overviewLines = computed(() => {
       key: 'multimodal',
       title: t('uploadConfirm.tabMultimodal'),
       value: mm.enabled
-        ? `${t('uploadConfirm.statusOn')} · ${mm.vllmModelId ? getModelName(mm.vllmModelId) : t('uploadConfirm.notSet')}`
+        ? `${t('uploadConfirm.statusOn')} · ${mm.vllmModelId ? getModelName(mm.vllmModelId) : t('uploadConfirm.notSet')}${
+            mm.fallbackVllmModelId
+              ? ` · ${t('knowledgeEditor.advanced.multimodal.fallbackVllmLabel')}: ${getModelName(mm.fallbackVllmModelId)}`
+              : ''
+          }`
         : (hasImages.value ? t('uploadConfirm.multimodalRequiredForImages') : t('uploadConfirm.statusOff')),
     },
     {
@@ -613,7 +633,7 @@ function createDefaultUIState(): UploadUIState {
       tokenLimit: 0,
       languages: [],
     },
-    multimodalConfig: { enabled: false, vllmModelId: '' },
+    multimodalConfig: { enabled: false, vllmModelId: '', fallbackVllmModelId: '' },
     asrConfig: { enabled: false, modelId: '', language: '' },
     questionGenerationConfig: { enabled: true, questionCount: 3 },
     nodeExtractConfig: {
@@ -649,6 +669,7 @@ function initFromKbInfo(kb: any) {
     multimodalConfig: {
       enabled: !!kb.vlm_config?.enabled,
       vllmModelId: kb.vlm_config?.model_id || '',
+      fallbackVllmModelId: kb.vlm_config?.fallback_model_id || '',
     },
     asrConfig: {
       enabled: !!kb.asr_config?.enabled,
@@ -694,6 +715,7 @@ function buildProcessOverrides(): KnowledgeProcessOverrides {
     vlm_config: {
       enabled: state.multimodalConfig.enabled,
       model_id: state.multimodalConfig.vllmModelId,
+      fallback_model_id: state.multimodalConfig.enabled ? state.multimodalConfig.fallbackVllmModelId : '',
     },
     asr_config: {
       enabled: state.asrConfig.enabled,
@@ -736,6 +758,9 @@ function applyOverridesToState(o?: KnowledgeProcessOverrides | null) {
   if (o.vlm_config) {
     if (o.vlm_config.enabled != null) s.multimodalConfig.enabled = o.vlm_config.enabled
     if (o.vlm_config.model_id != null) s.multimodalConfig.vllmModelId = o.vlm_config.model_id
+    if (o.vlm_config.fallback_model_id != null) {
+      s.multimodalConfig.fallbackVllmModelId = o.vlm_config.fallback_model_id
+    }
   }
   if (o.asr_config) {
     if (o.asr_config.enabled != null) s.asrConfig.enabled = o.asr_config.enabled
@@ -832,6 +857,14 @@ const handleChunkingConfigUpdate = (config: ChunkingUIConfig) => {
 
 const handleMultimodalVLLMChange = (modelId: string) => {
   uiState.value.multimodalConfig.vllmModelId = modelId
+  if (uiState.value.multimodalConfig.fallbackVllmModelId === modelId) {
+    uiState.value.multimodalConfig.fallbackVllmModelId = ''
+  }
+}
+
+const handleMultimodalFallbackVLLMChange = (modelId: string) => {
+  uiState.value.multimodalConfig.fallbackVllmModelId =
+    modelId === uiState.value.multimodalConfig.vllmModelId ? '' : modelId
 }
 
 const handleAddVLLMModel = () => {

@@ -3822,6 +3822,9 @@ export default {
         vllmLabel: "VLLM 视觉模型",
         vllmDescription: "用于多模态理解的视觉语言模型（必选）",
         vllmPlaceholder: "请选择 VLLM 模型（必选）",
+        fallbackVllmLabel: "兜底 VLLM 模型",
+        fallbackVllmDescription: "主视觉模型请求失败时自动使用的备用模型",
+        fallbackVllmPlaceholder: "请选择兜底 VLLM 模型（可选）",
         storageTitle: "存储配置",
         storageTypeLabel: "存储类型",
         storageTypeDescription:

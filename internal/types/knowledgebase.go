@@ -385,8 +385,9 @@ func (c *ImageProcessingConfig) Scan(value interface{}) error {
 
 // VLMConfig represents the VLM configuration
 type VLMConfig struct {
-	Enabled bool   `yaml:"enabled"  json:"enabled"`
-	ModelID string `yaml:"model_id" json:"model_id"`
+	Enabled         bool   `yaml:"enabled"           json:"enabled"`
+	ModelID         string `yaml:"model_id"          json:"model_id"`
+	FallbackModelID string `yaml:"fallback_model_id" json:"fallback_model_id"`
 
 	// 兼容老版本
 	// Model Name

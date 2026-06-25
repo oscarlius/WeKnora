@@ -3811,6 +3811,9 @@ export default {
         vllmLabel: "VLLM 비전 모델",
         vllmDescription: "멀티모달 이해를 위한 비전 언어 모델 (필수)",
         vllmPlaceholder: "VLLM 모델을 선택해주세요 (필수)",
+        fallbackVllmLabel: "대체 VLLM 모델",
+        fallbackVllmDescription: "기본 비전 모델 요청 실패 시 자동으로 사용할 백업 모델",
+        fallbackVllmPlaceholder: "대체 VLLM 모델을 선택해주세요 (선택)",
         storageTitle: "저장소 설정",
         storageTypeLabel: "저장소 유형",
         storageTypeDescription:

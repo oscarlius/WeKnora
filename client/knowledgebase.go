@@ -66,8 +66,9 @@ type ImageProcessingConfig struct {
 
 // VLMConfig represents the VLM configuration
 type VLMConfig struct {
-	Enabled bool   `json:"enabled"`
-	ModelID string `json:"model_id"`
+	Enabled         bool   `json:"enabled"`
+	ModelID         string `json:"model_id"`
+	FallbackModelID string `json:"fallback_model_id"`
 }
 
 // StorageProviderConfig stores the KB-level storage provider selection.

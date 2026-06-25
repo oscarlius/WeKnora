@@ -58,6 +58,22 @@ func TestInferStorageFromFilePath(t *testing.T) {
 	}
 }
 
+func TestVLMConfig_UnmarshalMissingFallbackModelID(t *testing.T) {
+	var cfg VLMConfig
+	if err := json.Unmarshal([]byte(`{"enabled":true,"model_id":"vlm-primary"}`), &cfg); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+	if !cfg.IsEnabled() {
+		t.Fatal("expected VLM config to remain enabled without fallback_model_id")
+	}
+	if cfg.ModelID != "vlm-primary" {
+		t.Fatalf("expected model_id vlm-primary, got %q", cfg.ModelID)
+	}
+	if cfg.FallbackModelID != "" {
+		t.Fatalf("expected empty fallback_model_id for old JSON, got %q", cfg.FallbackModelID)
+	}
+}
+
 // strPtr returns a pointer to the given string, used to express *string literals in tests.
 func strPtr(s string) *string { return &s }
 
