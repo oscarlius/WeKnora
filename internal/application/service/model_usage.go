@@ -13,6 +13,8 @@ type modelUsageService struct {
 	repo interfaces.ModelUsageRepository
 }
 
+const modelUsageTimelineBucket = 2 * time.Hour
+
 func NewModelUsageService(repo interfaces.ModelUsageRepository) interfaces.ModelUsageService {
 	return &modelUsageService{repo: repo}
 }
@@ -40,12 +42,12 @@ func (s *modelUsageService) GetUsageReport(
 func usageWindow(value string, now time.Time) (time.Time, time.Duration) {
 	switch value {
 	case "15m":
-		return now.Add(-15 * time.Minute), time.Minute
+		return now.Add(-15 * time.Minute), modelUsageTimelineBucket
 	case "1h":
-		return now.Add(-time.Hour), 5 * time.Minute
+		return now.Add(-time.Hour), modelUsageTimelineBucket
 	case "7d":
-		return now.Add(-7 * 24 * time.Hour), 6 * time.Hour
+		return now.Add(-7 * 24 * time.Hour), modelUsageTimelineBucket
 	default:
-		return now.Add(-24 * time.Hour), 30 * time.Minute
+		return now.Add(-24 * time.Hour), modelUsageTimelineBucket
 	}
 }

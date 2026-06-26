@@ -278,6 +278,7 @@ const chartPalette = [
   '#84cc16',
   '#ef4444',
 ]
+const minChartBucketCalls = 100
 
 const modelNameMap = computed(() => {
   const names = new Map<string, string>()
@@ -340,6 +341,7 @@ const chartBuckets = computed<ChartBucket[]>(() => {
   }
   return Array.from(buckets.values())
     .sort((a, b) => new Date(a.bucket_start).getTime() - new Date(b.bucket_start).getTime())
+    .filter((bucket) => bucket.calls >= minChartBucketCalls)
     .slice(-24)
     .map((bucket) => ({
       bucket_start: bucket.bucket_start,
@@ -358,16 +360,17 @@ const chartBuckets = computed<ChartBucket[]>(() => {
 
 const modelLegend = computed<ChartLegendItem[]>(() => {
   const totals = new Map<string, ChartLegendItem>()
-  for (const point of report.value.timeline) {
-    const key = modelUsageKey(point.model_id, point.model_name, point.model_type)
-    const existing = totals.get(key) || {
-      model_key: key,
-      model_name: modelNameMap.value.get(key) || point.model_name || '-',
-      total_tokens: 0,
-      color: modelColorMap.value.get(key) || chartPalette[0],
+  for (const bucket of chartBuckets.value) {
+    for (const segment of bucket.segments) {
+      const existing = totals.get(segment.model_key) || {
+        model_key: segment.model_key,
+        model_name: segment.model_name,
+        total_tokens: 0,
+        color: segment.color,
+      }
+      existing.total_tokens += segment.total_tokens
+      totals.set(segment.model_key, existing)
     }
-    existing.total_tokens += point.total_tokens
-    totals.set(key, existing)
   }
   return Array.from(totals.values()).sort((a, b) => b.total_tokens - a.total_tokens)
 })

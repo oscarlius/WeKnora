@@ -14,6 +14,11 @@ type modelUsageRepository struct {
 	db *gorm.DB
 }
 
+const (
+	defaultModelUsageTimelineBucket  = 2 * time.Hour
+	minModelUsageTimelineBucketCalls = int64(100)
+)
+
 func NewModelUsageRepository(db *gorm.DB) interfaces.ModelUsageRepository {
 	return &modelUsageRepository{db: db}
 }
@@ -130,7 +135,7 @@ func (r *modelUsageRepository) timeline(
 ) ([]types.ModelUsageTimelinePoint, error) {
 	bucketSeconds := int64(query.BucketSize.Seconds())
 	if bucketSeconds <= 0 {
-		bucketSeconds = int64((30 * time.Minute).Seconds())
+		bucketSeconds = int64(defaultModelUsageTimelineBucket.Seconds())
 	}
 	bucketExpr := "CAST(FLOOR(EXTRACT(EPOCH FROM e.created_at) / ?) * ? AS BIGINT)"
 	if r.db.Dialector.Name() == "sqlite" {
@@ -169,8 +174,16 @@ func (r *modelUsageRepository) timeline(
 		return nil, err
 	}
 
+	bucketCalls := make(map[int64]int64, len(rows))
+	for _, item := range rows {
+		bucketCalls[item.BucketEpoch] += item.Calls
+	}
+
 	points := make([]types.ModelUsageTimelinePoint, 0, len(rows))
 	for _, r := range rows {
+		if bucketCalls[r.BucketEpoch] < minModelUsageTimelineBucketCalls {
+			continue
+		}
 		points = append(points, types.ModelUsageTimelinePoint{
 			BucketStart:      time.Unix(r.BucketEpoch, 0).UTC(),
 			ModelID:          r.ModelID,
