@@ -91,20 +91,33 @@ type ImageMultimodalService struct {
 }
 
 type resolvedImageVLM struct {
-	primary         vlm.VLM
-	fallback        vlm.VLM
-	primaryModelID  string
-	fallbackModelID string
+	candidates        []imageVLMCandidate
+	requestedModelIDs []string
+	resolveErrors     []string
 }
 
 type vlmPredictionTrace struct {
 	PrimaryModelID  string
 	FallbackModelID string
+	ModelChainIDs   []string
+	Attempts        []vlmPredictionAttempt
 	UsedModelID     string
 	UsedModelName   string
 	FallbackReason  string
 	PrimaryError    string
 	FallbackError   string
+	AllFailedError  string
+}
+
+type imageVLMCandidate struct {
+	model   vlm.VLM
+	modelID string
+}
+
+type vlmPredictionAttempt struct {
+	ModelID   string `json:"model_id"`
+	ModelName string `json:"model_name,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 func NewImageMultimodalService(
@@ -256,6 +269,12 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 	if id := imageVLM.fallbackTraceID(); id != "" {
 		imgOut["vlm_fallback_model_id"] = id
 	}
+	if ids := imageVLM.modelChainTraceIDs(); len(ids) > 0 {
+		imgOut["vlm_model_chain_ids"] = ids
+	}
+	if len(imageVLM.resolveErrors) > 0 {
+		imgOut["vlm_resolve_errors"] = imageVLM.resolveErrors
+	}
 
 	// Read image bytes. A provider:// URL must be resolved via FileService —
 	// it must NEVER be handed to the HTTP downloader (which would fail with
@@ -286,7 +305,7 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 		}
 		prompt = types.AppendCustomPromptInstructions(prompt, vlmCfg.CustomInstructions, "image_ocr")
 
-		ocrText, ocrTrace, ocrErr := predictWithVLMFallback(ctx, imageVLM, [][]byte{imgBytes}, prompt)
+		ocrText, ocrTrace, ocrErr := predictWithVLMChain(ctx, imageVLM, [][]byte{imgBytes}, prompt)
 		recordVLMTrace(imgOut, "ocr", ocrTrace)
 		if ocrErr != nil {
 			logger.Warnf(ctx, "[ImageMultimodal] OCR failed for %s: %v", payload.ImageURL, ocrErr)
@@ -306,7 +325,7 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 	}
 
 	captionPrompt := buildVLMCaptionPrompt(ctx, vlmCfg)
-	caption, capTrace, capErr := predictWithVLMFallback(ctx, imageVLM, [][]byte{imgBytes}, captionPrompt)
+	caption, capTrace, capErr := predictWithVLMChain(ctx, imageVLM, [][]byte{imgBytes}, captionPrompt)
 	recordVLMTrace(imgOut, "caption", capTrace)
 	if capErr != nil {
 		logger.Warnf(ctx, "[ImageMultimodal] Caption failed for %s: %v", payload.ImageURL, capErr)
@@ -555,30 +574,34 @@ func (s *ImageMultimodalService) resolveVLM(ctx context.Context, kbID, knowledge
 		return nil, vlmCfg, fmt.Errorf("VLM is not enabled for knowledge base %s", kbID)
 	}
 
-	// New-style: resolve model through ModelService
+	// New-style: resolve the configured model chain through ModelService.
 	if vlmCfg.ModelID != "" {
-		primary, err := s.modelService.GetVLMModel(ctx, vlmCfg.ModelID)
-		if err != nil {
-			return nil, vlmCfg, err
-		}
-		if primary == nil {
-			return nil, vlmCfg, fmt.Errorf("VLM model %s not found", vlmCfg.ModelID)
-		}
-		resolved := &resolvedImageVLM{
-			primary:        primary,
-			primaryModelID: strings.TrimSpace(vlmCfg.ModelID),
-		}
-		fallbackID := strings.TrimSpace(vlmCfg.FallbackModelID)
-		if fallbackID != "" && fallbackID != strings.TrimSpace(vlmCfg.ModelID) {
-			fallback, ferr := s.modelService.GetVLMModel(ctx, fallbackID)
-			if ferr != nil {
-				logger.Warnf(ctx, "[ImageMultimodal] Fallback VLM model %s unavailable: %v", fallbackID, ferr)
-			} else if fallback == nil {
-				logger.Warnf(ctx, "[ImageMultimodal] Fallback VLM model %s resolved to nil", fallbackID)
-			} else {
-				resolved.fallback = fallback
-				resolved.fallbackModelID = fallbackID
+		chainIDs := vlmCfg.ModelChainIDs()
+		resolved := &resolvedImageVLM{requestedModelIDs: chainIDs}
+		for _, modelID := range chainIDs {
+			m, merr := s.modelService.GetVLMModel(ctx, modelID)
+			if merr != nil {
+				msg := fmt.Sprintf("VLM model %s unavailable: %v", modelID, merr)
+				logger.Warnf(ctx, "[ImageMultimodal] %s", msg)
+				resolved.resolveErrors = append(resolved.resolveErrors, msg)
+				continue
 			}
+			if m == nil {
+				msg := fmt.Sprintf("VLM model %s resolved to nil", modelID)
+				logger.Warnf(ctx, "[ImageMultimodal] %s", msg)
+				resolved.resolveErrors = append(resolved.resolveErrors, msg)
+				continue
+			}
+			resolved.candidates = append(resolved.candidates, imageVLMCandidate{
+				model:   m,
+				modelID: modelID,
+			})
+		}
+		if len(resolved.candidates) == 0 {
+			if len(resolved.resolveErrors) > 0 {
+				return nil, vlmCfg, fmt.Errorf("no VLM models resolved from chain %v: %s", chainIDs, strings.Join(resolved.resolveErrors, "; "))
+			}
+			return nil, vlmCfg, fmt.Errorf("no VLM models configured for knowledge base %s", kbID)
 		}
 		return resolved, vlmCfg, nil
 	}
@@ -589,8 +612,11 @@ func (s *ImageMultimodalService) resolveVLM(ctx context.Context, kbID, knowledge
 		return nil, vlmCfg, err
 	}
 	return &resolvedImageVLM{
-		primary:        model,
-		primaryModelID: "legacy_inline",
+		requestedModelIDs: []string{"legacy_inline"},
+		candidates: []imageVLMCandidate{{
+			model:   model,
+			modelID: "legacy_inline",
+		}},
 	}, vlmCfg, nil
 }
 
@@ -598,20 +624,46 @@ func (v *resolvedImageVLM) primaryTraceID() string {
 	if v == nil {
 		return ""
 	}
-	if id := strings.TrimSpace(v.primaryModelID); id != "" {
-		return id
+	ids := v.modelChainTraceIDs()
+	if len(ids) == 0 {
+		return ""
 	}
-	return modelTraceID(v.primary, "legacy_inline")
+	return ids[0]
 }
 
 func (v *resolvedImageVLM) fallbackTraceID() string {
-	if v == nil || v.fallback == nil {
+	if v == nil {
 		return ""
 	}
-	if id := strings.TrimSpace(v.fallbackModelID); id != "" {
-		return id
+	ids := v.modelChainTraceIDs()
+	if len(ids) < 2 {
+		return ""
 	}
-	return modelTraceID(v.fallback, "")
+	return ids[1]
+}
+
+func (v *resolvedImageVLM) modelChainTraceIDs() []string {
+	if v == nil {
+		return nil
+	}
+	if len(v.requestedModelIDs) > 0 {
+		ids := make([]string, 0, len(v.requestedModelIDs))
+		for _, id := range v.requestedModelIDs {
+			if trimmed := strings.TrimSpace(id); trimmed != "" {
+				ids = append(ids, trimmed)
+			}
+		}
+		return ids
+	}
+	ids := make([]string, 0, len(v.candidates))
+	for _, candidate := range v.candidates {
+		if id := strings.TrimSpace(candidate.modelID); id != "" {
+			ids = append(ids, id)
+		} else if id := modelTraceID(candidate.model, ""); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func modelTraceID(model vlm.VLM, defaultID string) string {
@@ -630,44 +682,56 @@ func modelTraceName(model vlm.VLM) string {
 	return strings.TrimSpace(model.GetModelName())
 }
 
-func predictWithVLMFallback(
+func predictWithVLMChain(
 	ctx context.Context,
 	imageVLM *resolvedImageVLM,
 	imgBytesList [][]byte,
 	prompt string,
 ) (string, vlmPredictionTrace, error) {
 	trace := vlmPredictionTrace{}
-	if imageVLM == nil || imageVLM.primary == nil {
-		return "", trace, fmt.Errorf("primary VLM is not resolved")
+	if imageVLM == nil || len(imageVLM.candidates) == 0 {
+		return "", trace, fmt.Errorf("VLM model chain is not resolved")
 	}
 
 	trace.PrimaryModelID = imageVLM.primaryTraceID()
 	trace.FallbackModelID = imageVLM.fallbackTraceID()
+	trace.ModelChainIDs = imageVLM.modelChainTraceIDs()
 
-	text, err := imageVLM.primary.Predict(ctx, imgBytesList, prompt)
-	if err == nil {
-		trace.UsedModelID = trace.PrimaryModelID
-		trace.UsedModelName = modelTraceName(imageVLM.primary)
-		return text, trace, nil
+	failures := make([]string, 0, len(imageVLM.candidates))
+	for idx, candidate := range imageVLM.candidates {
+		modelID := strings.TrimSpace(candidate.modelID)
+		if modelID == "" {
+			modelID = modelTraceID(candidate.model, "")
+		}
+		attempt := vlmPredictionAttempt{
+			ModelID:   modelID,
+			ModelName: modelTraceName(candidate.model),
+		}
+
+		text, err := candidate.model.Predict(ctx, imgBytesList, prompt)
+		if err != nil {
+			attempt.Error = err.Error()
+		} else if strings.TrimSpace(text) == "" {
+			attempt.Error = "empty VLM response"
+		} else {
+			trace.Attempts = append(trace.Attempts, attempt)
+			trace.UsedModelID = modelID
+			trace.UsedModelName = attempt.ModelName
+			return text, trace, nil
+		}
+
+		trace.Attempts = append(trace.Attempts, attempt)
+		failures = append(failures, fmt.Sprintf("%s: %s", modelID, attempt.Error))
+		if idx == 0 {
+			trace.PrimaryError = attempt.Error
+			trace.FallbackReason = attempt.Error
+		} else {
+			trace.FallbackError = attempt.Error
+		}
 	}
 
-	trace.PrimaryError = err.Error()
-	if imageVLM.fallback == nil {
-		trace.UsedModelID = trace.PrimaryModelID
-		trace.UsedModelName = modelTraceName(imageVLM.primary)
-		return "", trace, err
-	}
-
-	trace.FallbackReason = err.Error()
-	fallbackText, fallbackErr := imageVLM.fallback.Predict(ctx, imgBytesList, prompt)
-	if fallbackErr != nil {
-		trace.FallbackError = fallbackErr.Error()
-		return "", trace, fmt.Errorf("primary VLM failed: %w; fallback VLM failed: %v", err, fallbackErr)
-	}
-
-	trace.UsedModelID = trace.FallbackModelID
-	trace.UsedModelName = modelTraceName(imageVLM.fallback)
-	return fallbackText, trace, nil
+	trace.AllFailedError = strings.Join(failures, "; ")
+	return "", trace, fmt.Errorf("all VLM models failed: %s", trace.AllFailedError)
 }
 
 func recordVLMTrace(out types.JSONMap, prefix string, trace vlmPredictionTrace) {
@@ -680,6 +744,13 @@ func recordVLMTrace(out types.JSONMap, prefix string, trace vlmPredictionTrace) 
 	if trace.FallbackModelID != "" {
 		out["vlm_fallback_model_id"] = trace.FallbackModelID
 		out[prefix+"_vlm_fallback_model_id"] = trace.FallbackModelID
+	}
+	if len(trace.ModelChainIDs) > 0 {
+		out["vlm_model_chain_ids"] = trace.ModelChainIDs
+		out[prefix+"_vlm_model_chain_ids"] = trace.ModelChainIDs
+	}
+	if len(trace.Attempts) > 0 {
+		out[prefix+"_vlm_attempts"] = trace.Attempts
 	}
 	if trace.UsedModelID != "" {
 		out["vlm_used_model_id"] = trace.UsedModelID
@@ -698,6 +769,9 @@ func recordVLMTrace(out types.JSONMap, prefix string, trace vlmPredictionTrace) 
 	}
 	if trace.FallbackError != "" {
 		out[prefix+"_vlm_fallback_error"] = previewText(trace.FallbackError, 300)
+	}
+	if trace.AllFailedError != "" {
+		out[prefix+"_vlm_all_failed_error"] = previewText(trace.AllFailedError, 600)
 	}
 }
 

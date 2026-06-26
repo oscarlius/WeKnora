@@ -26,6 +26,7 @@ export interface VLMConfigOverride {
   description_language?: string
   custom_instructions?: string
   fallback_model_id?: string
+  fallback_model_ids?: string[]
 }
 
 export interface ASRConfigOverride {

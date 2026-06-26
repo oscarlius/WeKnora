@@ -101,6 +101,7 @@ export function createKnowledgeBase(data: {
     description_language?: string;
     custom_instructions?: string;
     fallback_model_id?: string;
+    fallback_model_ids?: string[];
   };
   storage_provider_config?: { provider: string };
   storage_config?: any; // legacy, kept for backward compat (dual-write)

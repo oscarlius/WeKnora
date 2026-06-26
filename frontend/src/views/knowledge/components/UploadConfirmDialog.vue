@@ -330,37 +330,27 @@
                             <t-switch v-model="uiState.multimodalConfig.enabled" size="medium" />
                           </div>
                         </div>
-                        <div v-if="uiState.multimodalConfig.enabled" class="setting-row">
+                        <div v-if="uiState.multimodalConfig.enabled" class="setting-row setting-row--field">
                           <div class="setting-info">
-                            <label>{{ t('knowledgeEditor.advanced.multimodal.vllmLabel') }} <span class="required">*</span></label>
-                            <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.vllmDescription') }}</p>
+                            <label>
+                              {{ t('knowledgeEditor.vlmChain.title') }}
+                              <span class="required">*</span>
+                            </label>
+                            <p class="desc">{{ t('knowledgeEditor.vlmChain.description') }}</p>
                           </div>
-                          <div class="setting-control">
-                            <ModelSelector
-                              model-type="VLLM"
-                              :selected-model-id="uiState.multimodalConfig.vllmModelId"
+                          <div class="setting-control setting-control--full">
+                            <VLMModelChainSelector
+                              :model-ids="uiState.multimodalConfig.vllmModelIds"
                               :all-models="allModels"
                               :status="showMultimodalModelError ? 'error' : 'default'"
-                              :placeholder="t('knowledgeEditor.advanced.multimodal.vllmPlaceholder')"
-                              @update:selected-model-id="handleMultimodalVLLMChange"
+                              :primary-placeholder="t('knowledgeEditor.advanced.multimodal.vllmPlaceholder')"
+                              :fallback-placeholder="t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
+                              @update:model-ids="handleMultimodalVLLMChainChange"
                               @add-model="handleAddVLLMModel"
                             />
-                          </div>
-                        </div>
-                        <div v-if="uiState.multimodalConfig.enabled" class="setting-row">
-                          <div class="setting-info">
-                            <label>{{ t('knowledgeEditor.advanced.multimodal.fallbackVllmLabel') }}</label>
-                            <p class="desc">{{ t('knowledgeEditor.advanced.multimodal.fallbackVllmDescription') }}</p>
-                          </div>
-                          <div class="setting-control">
-                            <ModelSelector
-                              model-type="VLLM"
-                              :selected-model-id="uiState.multimodalConfig.fallbackVllmModelId"
-                              :all-models="allModels"
-                              :placeholder="t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
-                              @update:selected-model-id="(value: string) => { uiState.multimodalConfig.fallbackVllmModelId = value }"
-                              @add-model="handleAddVLLMModel"
-                            />
+                            <p v-if="showMultimodalModelError" class="field-error">
+                              {{ t('uploadConfirm.vlmModelSelectRequired') }}
+                            </p>
                           </div>
                         </div>
                         <div v-if="uiState.multimodalConfig.enabled" class="setting-row">
@@ -529,6 +519,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import ModelSelector from '@/components/ModelSelector.vue'
+import VLMModelChainSelector from '@/components/VLMModelChainSelector.vue'
 import KBParserSettings from '../settings/KBParserSettings.vue'
 import GraphSettings from '../settings/GraphSettings.vue'
 import { useChatResourcesStore } from '@/stores/chatResources'
@@ -572,7 +563,7 @@ interface ChunkingUIConfig {
 
 interface UploadUIState {
   chunkingConfig: ChunkingUIConfig
-  multimodalConfig: { enabled: boolean; vllmModelId: string; fallbackVllmModelId: string; descriptionLanguage?: string; customInstructions?: string }
+  multimodalConfig: { enabled: boolean; vllmModelIds: string[]; descriptionLanguage?: string; customInstructions?: string }
   asrConfig: { enabled: boolean; modelId: string; language: string }
   questionGenerationConfig: { enabled: boolean; questionCount: number; customInstructions?: string }
   nodeExtractConfig: {
@@ -641,6 +632,49 @@ function getModelName(modelId: string): string {
   if (!modelId) return t('uploadConfirm.notSet')
   const model = allModels.value.find((m: any) => m.id === modelId)
   return model?.name || modelId
+}
+
+function normalizeVLMModelIds(config?: any): string[] {
+  const rawIds = [
+    config?.model_id,
+    ...(Array.isArray(config?.fallback_model_ids) ? config.fallback_model_ids : []),
+  ]
+  if (!Array.isArray(config?.fallback_model_ids) && config?.fallback_model_id) {
+    rawIds.push(config.fallback_model_id)
+  }
+  const seen = new Set<string>()
+  const ids = rawIds
+    .map((id: any) => String(id || '').trim())
+    .filter((id: string) => {
+      if (!id || seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    .slice(0, 5)
+  return ids.length > 0 ? ids : ['']
+}
+
+function buildVLMConfigPayload(enabled: boolean, modelIds: string[]) {
+  const ids = normalizeVLMModelIds({
+    model_id: modelIds[0] || '',
+    fallback_model_ids: modelIds.slice(1),
+  })
+  const activeIds = enabled ? ids.filter(Boolean).slice(0, 5) : []
+  return {
+    enabled,
+    model_id: activeIds[0] || '',
+    fallback_model_id: activeIds[1] || '',
+    fallback_model_ids: activeIds.slice(1),
+  }
+}
+
+function formatVLMModelChain(modelIds: string[]): string {
+  const activeIds = normalizeVLMModelIds({
+    model_id: modelIds[0] || '',
+    fallback_model_ids: modelIds.slice(1),
+  }).filter(Boolean)
+  if (!activeIds.length) return t('uploadConfirm.notSet')
+  return activeIds.map((id, index) => `${index + 1}. ${getModelName(id)}`).join(' -> ')
 }
 
 function truncateNavText(text: string, max = 18): string {
@@ -782,7 +816,7 @@ const isGraphSectionAvailable = computed(() => {
 })
 
 const showMultimodalModelError = computed(() => {
-  return uiState.value.multimodalConfig.enabled && !uiState.value.multimodalConfig.vllmModelId
+  return uiState.value.multimodalConfig.enabled && !uiState.value.multimodalConfig.vllmModelIds?.[0]
 })
 
 const showAsrModelError = computed(() => {
@@ -792,7 +826,7 @@ const showAsrModelError = computed(() => {
 const issueSectionKeys = computed(() => {
   const keys = new Set<IssueSectionKey>()
   if (hasImages.value) {
-    if (!uiState.value.multimodalConfig.enabled || !uiState.value.multimodalConfig.vllmModelId) {
+    if (!uiState.value.multimodalConfig.enabled || !uiState.value.multimodalConfig.vllmModelIds?.[0]) {
       keys.add('multimodal')
     }
   } else if (showMultimodalModelError.value) {
@@ -894,8 +928,8 @@ function getSectionNavStatus(
         return { status: t('uploadConfirm.statusOff'), statusTone: 'muted' }
       }
       return {
-        status: mm.vllmModelId ? getModelName(mm.vllmModelId) : t('uploadConfirm.notSet'),
-        statusTone: mm.vllmModelId ? undefined : 'warning',
+        status: mm.vllmModelIds?.[0] ? formatVLMModelChain(mm.vllmModelIds) : t('uploadConfirm.notSet'),
+        statusTone: mm.vllmModelIds?.[0] ? undefined : 'warning',
       }
     }
     case 'asr': {
@@ -939,7 +973,7 @@ const canConfirm = computed(() => {
   if (props.mode === 'file' && batchItemCount.value === 0) return false
   if (props.mode === 'manual' && !props.manualPreview?.content?.trim()) return false
   if (hasImages.value) {
-    if (!uiState.value.multimodalConfig.enabled || !uiState.value.multimodalConfig.vllmModelId) {
+    if (!uiState.value.multimodalConfig.enabled || !uiState.value.multimodalConfig.vllmModelIds?.[0]) {
       return false
     }
   }
@@ -983,7 +1017,7 @@ function createDefaultUIState(): UploadUIState {
       languages: [],
       tableMetadataInstructions: '',
     },
-    multimodalConfig: { enabled: false, vllmModelId: '', fallbackVllmModelId: '', descriptionLanguage: '', customInstructions: '' },
+    multimodalConfig: { enabled: false, vllmModelIds: [''], descriptionLanguage: '', customInstructions: '' },
     asrConfig: { enabled: false, modelId: '', language: '' },
     questionGenerationConfig: { enabled: true, questionCount: 3, customInstructions: '' },
     nodeExtractConfig: {
@@ -1021,8 +1055,7 @@ function initFromKbInfo(kb: any) {
     },
     multimodalConfig: {
       enabled: !!kb.vlm_config?.enabled,
-      vllmModelId: kb.vlm_config?.model_id || '',
-      fallbackVllmModelId: kb.vlm_config?.fallback_model_id || '',
+      vllmModelIds: normalizeVLMModelIds(kb.vlm_config),
       descriptionLanguage: kb.vlm_config?.description_language || '',
       customInstructions: kb.vlm_config?.custom_instructions || '',
     },
@@ -1072,9 +1105,7 @@ function buildProcessOverrides(): KnowledgeProcessOverrides {
     },
     enable_multimodel: state.multimodalConfig.enabled,
     vlm_config: {
-      enabled: state.multimodalConfig.enabled,
-      model_id: state.multimodalConfig.vllmModelId,
-      fallback_model_id: state.multimodalConfig.enabled ? state.multimodalConfig.fallbackVllmModelId : '',
+      ...buildVLMConfigPayload(state.multimodalConfig.enabled, state.multimodalConfig.vllmModelIds),
       description_language: state.multimodalConfig.descriptionLanguage,
       custom_instructions: state.multimodalConfig.customInstructions,
     },
@@ -1129,8 +1160,7 @@ function applyOverridesToState(o?: KnowledgeProcessOverrides | null) {
   if (o.enable_multimodel != null) s.multimodalConfig.enabled = o.enable_multimodel
   if (o.vlm_config) {
     if (o.vlm_config.enabled != null) s.multimodalConfig.enabled = o.vlm_config.enabled
-    if (o.vlm_config.model_id != null) s.multimodalConfig.vllmModelId = o.vlm_config.model_id
-    if (o.vlm_config.fallback_model_id != null) s.multimodalConfig.fallbackVllmModelId = o.vlm_config.fallback_model_id
+    s.multimodalConfig.vllmModelIds = normalizeVLMModelIds(o.vlm_config)
     if (o.vlm_config.description_language != null) s.multimodalConfig.descriptionLanguage = o.vlm_config.description_language
     if (o.vlm_config.custom_instructions != null) s.multimodalConfig.customInstructions = o.vlm_config.custom_instructions
   }
@@ -1274,8 +1304,11 @@ const handleParserEngineRulesUpdate = (rules: Array<{
   uiState.value.chunkingConfig.parserEngineRules = rules
 }
 
-const handleMultimodalVLLMChange = (modelId: string) => {
-  uiState.value.multimodalConfig.vllmModelId = modelId
+const handleMultimodalVLLMChainChange = (modelIds: string[]) => {
+  uiState.value.multimodalConfig.vllmModelIds = normalizeVLMModelIds({
+    model_id: modelIds[0] || '',
+    fallback_model_ids: modelIds.slice(1),
+  })
 }
 
 const handleAddVLLMModel = () => {
@@ -1293,7 +1326,7 @@ const handleNodeExtractUpdate = (config: UploadUIState['nodeExtractConfig']) => 
 
 const validateBeforeConfirm = (): boolean => {
   if (hasImages.value) {
-    if (!uiState.value.multimodalConfig.enabled || !uiState.value.multimodalConfig.vllmModelId) {
+    if (!uiState.value.multimodalConfig.enabled || !uiState.value.multimodalConfig.vllmModelIds?.[0]) {
       MessagePlugin.warning(t('uploadConfirm.vlmModelRequired'))
       uiState.value.multimodalConfig.enabled = true
       goToSection('multimodal')
