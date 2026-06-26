@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/utils/ollama"
 	"github.com/Tencent/WeKnora/internal/models/vlm"
+	"github.com/Tencent/WeKnora/internal/ratelimit"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -50,6 +53,8 @@ const (
 	vlmCaptionPrompt = "Provide a brief and concise description of the main content of the image in Chinese"
 )
 
+var ErrVLMRateLimited = errors.New("vlm rate limited")
+
 // ImageMultimodalService handles image:multimodal asynq tasks.
 // It reads images from storage (via FileService for provider:// URLs),
 // performs OCR and VLM caption, and creates child chunks.
@@ -64,6 +69,7 @@ type ImageMultimodalService struct {
 	ollamaService  *ollama.OllamaService
 	taskEnqueuer   interfaces.TaskEnqueuer
 	redisClient    *redis.Client
+	vlmLimiter     *ratelimit.Limiter
 	// fileSvc is the globally configured default FileService used as a fallback
 	// when the tenant-scoped storage config cannot produce a usable service
 	// (e.g. images were saved using the global MINIO_* env vars while the
@@ -131,6 +137,7 @@ func NewImageMultimodalService(
 		ollamaService:  ollamaService,
 		taskEnqueuer:   taskEnqueuer,
 		redisClient:    redisClient,
+		vlmLimiter:     ratelimit.New(redisClient, "vlm:ratelimit:", time.Minute, ""),
 		fileSvc:        fileSvc,
 		spanTracker:    spanTracker,
 	}
@@ -281,11 +288,16 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 			imgOut["ocr_prompt"] = "default"
 		}
 
-		ocrText, ocrTrace, ocrErr := predictWithVLMChain(ctx, imageVLM, [][]byte{imgBytes}, prompt)
+		ocrText, ocrTrace, ocrErr := s.predictWithVLMChain(ctx, imageVLM, [][]byte{imgBytes}, prompt)
 		recordVLMTrace(imgOut, "ocr", ocrTrace)
 		if ocrErr != nil {
-			logger.Warnf(ctx, "[ImageMultimodal] OCR failed for %s: %v", payload.ImageURL, ocrErr)
 			imgOut["ocr_error"] = ocrErr.Error()
+			if errors.Is(ocrErr, ErrVLMRateLimited) {
+				logger.Infof(ctx, "[ImageMultimodal] OCR delayed by VLM rate limit for %s: %v", payload.ImageURL, ocrErr)
+				handleErr = ocrErr
+				return handleErr
+			}
+			logger.Warnf(ctx, "[ImageMultimodal] OCR failed for %s: %v", payload.ImageURL, ocrErr)
 		} else {
 			ocrText = sanitizeOCRText(ocrText)
 			if ocrText != "" {
@@ -300,11 +312,16 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 		}
 	}
 
-	caption, capTrace, capErr := predictWithVLMChain(ctx, imageVLM, [][]byte{imgBytes}, vlmCaptionPrompt)
+	caption, capTrace, capErr := s.predictWithVLMChain(ctx, imageVLM, [][]byte{imgBytes}, vlmCaptionPrompt)
 	recordVLMTrace(imgOut, "caption", capTrace)
 	if capErr != nil {
-		logger.Warnf(ctx, "[ImageMultimodal] Caption failed for %s: %v", payload.ImageURL, capErr)
 		imgOut["caption_error"] = capErr.Error()
+		if errors.Is(capErr, ErrVLMRateLimited) {
+			logger.Infof(ctx, "[ImageMultimodal] Caption delayed by VLM rate limit for %s: %v", payload.ImageURL, capErr)
+			handleErr = capErr
+			return handleErr
+		}
+		logger.Warnf(ctx, "[ImageMultimodal] Caption failed for %s: %v", payload.ImageURL, capErr)
 	} else if caption != "" {
 		imageInfo.Caption = caption
 		imgOut["caption_chars"] = len([]rune(caption))
@@ -622,11 +639,32 @@ func modelTraceName(model vlm.VLM) string {
 	return strings.TrimSpace(model.GetModelName())
 }
 
+type vlmCallGate func(context.Context, imageVLMCandidate) error
+
+func (s *ImageMultimodalService) predictWithVLMChain(
+	ctx context.Context,
+	imageVLM *resolvedImageVLM,
+	imgBytesList [][]byte,
+	prompt string,
+) (string, vlmPredictionTrace, error) {
+	return predictWithVLMChainWithGate(ctx, imageVLM, imgBytesList, prompt, s.allowVLMCall)
+}
+
 func predictWithVLMChain(
 	ctx context.Context,
 	imageVLM *resolvedImageVLM,
 	imgBytesList [][]byte,
 	prompt string,
+) (string, vlmPredictionTrace, error) {
+	return predictWithVLMChainWithGate(ctx, imageVLM, imgBytesList, prompt, nil)
+}
+
+func predictWithVLMChainWithGate(
+	ctx context.Context,
+	imageVLM *resolvedImageVLM,
+	imgBytesList [][]byte,
+	prompt string,
+	gate vlmCallGate,
 ) (string, vlmPredictionTrace, error) {
 	trace := vlmPredictionTrace{}
 	if imageVLM == nil || len(imageVLM.candidates) == 0 {
@@ -646,6 +684,21 @@ func predictWithVLMChain(
 		attempt := vlmPredictionAttempt{
 			ModelID:   modelID,
 			ModelName: modelTraceName(candidate.model),
+		}
+
+		if gate != nil {
+			if err := gate(ctx, candidate); err != nil {
+				attempt.Error = err.Error()
+				trace.Attempts = append(trace.Attempts, attempt)
+				if idx == 0 {
+					trace.PrimaryError = attempt.Error
+					trace.FallbackReason = attempt.Error
+				} else {
+					trace.FallbackError = attempt.Error
+				}
+				trace.AllFailedError = attempt.Error
+				return "", trace, err
+			}
 		}
 
 		text, err := candidate.model.Predict(ctx, imgBytesList, prompt)
@@ -672,6 +725,30 @@ func predictWithVLMChain(
 
 	trace.AllFailedError = strings.Join(failures, "; ")
 	return "", trace, fmt.Errorf("all VLM models failed: %s", trace.AllFailedError)
+}
+
+func (s *ImageMultimodalService) allowVLMCall(ctx context.Context, candidate imageVLMCandidate) error {
+	limit := readVLMRPMLimit()
+	if limit <= 0 || s == nil || s.vlmLimiter == nil {
+		return nil
+	}
+	if s.vlmLimiter.Allow(ctx, "global", limit) {
+		return nil
+	}
+	modelID := strings.TrimSpace(candidate.modelID)
+	if modelID == "" {
+		modelID = modelTraceID(candidate.model, "unknown")
+	}
+	return fmt.Errorf("%w: limit=%d/min model_id=%s", ErrVLMRateLimited, limit, modelID)
+}
+
+func readVLMRPMLimit() int {
+	if v := strings.TrimSpace(os.Getenv("WEKNORA_VLM_RPM_LIMIT")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func recordVLMTrace(out types.JSONMap, prefix string, trace vlmPredictionTrace) {

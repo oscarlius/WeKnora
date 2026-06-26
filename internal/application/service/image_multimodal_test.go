@@ -153,3 +153,43 @@ func TestPredictWithVLMChain_AllFailedReturnsAggregatedError(t *testing.T) {
 		t.Fatalf("expected no used model, got %q", trace.UsedModelID)
 	}
 }
+
+func TestPredictWithVLMChain_RateLimitDoesNotCallModels(t *testing.T) {
+	primary := &fakeImageVLM{id: "primary-id", name: "primary", response: "primary text"}
+	fallback := &fakeImageVLM{id: "fallback-id", name: "fallback", response: "fallback text"}
+	gate := func(context.Context, imageVLMCandidate) error {
+		return ErrVLMRateLimited
+	}
+
+	_, trace, err := predictWithVLMChainWithGate(
+		context.Background(),
+		resolvedChain(primary, fallback),
+		[][]byte{{1, 2, 3}},
+		"prompt",
+		gate,
+	)
+	if !errors.Is(err, ErrVLMRateLimited) {
+		t.Fatalf("expected ErrVLMRateLimited, got %v", err)
+	}
+	if primary.calls != 0 || fallback.calls != 0 {
+		t.Fatalf("expected no model calls after rate limit, got primary=%d fallback=%d", primary.calls, fallback.calls)
+	}
+	if len(trace.Attempts) != 1 {
+		t.Fatalf("expected one traced attempt, got %d", len(trace.Attempts))
+	}
+	if trace.PrimaryError != ErrVLMRateLimited.Error() {
+		t.Fatalf("expected primary rate-limit error, got %q", trace.PrimaryError)
+	}
+}
+
+func TestReadVLMRPMLimit(t *testing.T) {
+	t.Setenv("WEKNORA_VLM_RPM_LIMIT", "300")
+	if got := readVLMRPMLimit(); got != 300 {
+		t.Fatalf("readVLMRPMLimit() = %d, want 300", got)
+	}
+
+	t.Setenv("WEKNORA_VLM_RPM_LIMIT", "bad")
+	if got := readVLMRPMLimit(); got != 0 {
+		t.Fatalf("readVLMRPMLimit() = %d, want disabled fallback 0", got)
+	}
+}
