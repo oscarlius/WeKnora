@@ -55,11 +55,32 @@ func isIconImage(data []byte) bool {
 	return false
 }
 
+func imageDimensions(data []byte) (width int, height int) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
 // StoredImage describes an image that has been saved to storage.
 type StoredImage struct {
 	OriginalRef string // reference in the original markdown
 	ServingURL  string // provider:// URL (e.g. local://images/xxx.png, minio://bucket/key)
 	MimeType    string
+	Width       int
+	Height      int
+}
+
+func newStoredImage(originalRef, servingURL, mimeType string, data []byte) StoredImage {
+	width, height := imageDimensions(data)
+	return StoredImage{
+		OriginalRef: originalRef,
+		ServingURL:  servingURL,
+		MimeType:    mimeType,
+		Width:       width,
+		Height:      height,
+	}
 }
 
 // ImageResolver reads images from a DocReader ReadResult (inline bytes only)
@@ -184,6 +205,8 @@ func (r *ImageResolver) saveReferencedImage(
 				OriginalRef: refPath,
 				ServingURL:  cached.ServingURL,
 				MimeType:    cached.MimeType,
+				Width:       cached.Width,
+				Height:      cached.Height,
 			}
 			savedRefs[refPath] = stored
 			return stored, true
@@ -205,11 +228,7 @@ func (r *ImageResolver) saveReferencedImage(
 		return StoredImage{}, false
 	}
 
-	stored := StoredImage{
-		OriginalRef: refPath,
-		ServingURL:  servingURL,
-		MimeType:    ref.MimeType,
-	}
+	stored := newStoredImage(refPath, servingURL, ref.MimeType, ref.ImageData)
 	savedRefs[refPath] = stored
 	if ref.Filename != "" {
 		savedRefs["__filename__:"+ref.Filename] = stored
@@ -397,11 +416,7 @@ func (r *ImageResolver) ResolveHTMLDataURIImages(
 			log.Printf("WARN: failed to save HTML img data URI image: %v", saveErr)
 			continue
 		}
-		images = append(images, StoredImage{
-			OriginalRef: "html-img-data-uri",
-			ServingURL:  servingURL,
-			MimeType:    mimeType,
-		})
+		images = append(images, newStoredImage("html-img-data-uri", servingURL, mimeType, data))
 		markdown = markdown[:m[0]] + fmt.Sprintf("![image](%s)", servingURL) + markdown[m[1]:]
 		processed++
 	}
@@ -536,11 +551,7 @@ func (r *ImageResolver) resolveBareDataURIs(
 			log.Printf("WARN: failed to save bare data URI image: %v", saveErr)
 			continue
 		}
-		images = append(images, StoredImage{
-			OriginalRef: "bare-data-uri",
-			ServingURL:  servingURL,
-			MimeType:    mimeType,
-		})
+		images = append(images, newStoredImage("bare-data-uri", servingURL, mimeType, data))
 		if insideWrapper {
 			// Inside a broken markdown ref like ![weird]alt](data:...) — replace data URI only
 			markdown = markdown[:m[0]] + servingURL + markdown[m[1]:]
@@ -604,11 +615,7 @@ func (r *ImageResolver) resolveBareBase64Prefix(
 			log.Printf("WARN: failed to save bare base64 image: %v", saveErr)
 			continue
 		}
-		images = append(images, StoredImage{
-			OriginalRef: "bare-base64",
-			ServingURL:  servingURL,
-			MimeType:    mimeType,
-		})
+		images = append(images, newStoredImage("bare-base64", servingURL, mimeType, data))
 		markdown = markdown[:m[0]] + fmt.Sprintf("![image](%s)", servingURL) + markdown[m[1]:]
 		processed++
 	}
@@ -736,11 +743,7 @@ func (r *ImageResolver) ResolveDataURIImages(
 			log.Printf("WARN: failed to save data URI image: %v", saveErr)
 			continue
 		}
-		images = append(images, StoredImage{
-			OriginalRef: dataURI,
-			ServingURL:  servingURL,
-			MimeType:    mimeType,
-		})
+		images = append(images, newStoredImage(dataURI, servingURL, mimeType, data))
 		markdown = markdown[:m[4]] + servingURL + markdown[m[5]:]
 		processed++
 	}

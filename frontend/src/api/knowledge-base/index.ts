@@ -114,6 +114,8 @@ export function createKnowledgeBase(data: {
   faq_config?: { index_mode: string; question_index_mode?: string };
   wiki_config?: {
     synthesis_model_id?: string;
+    synthesis_fallback_model_id?: string;
+    synthesis_fallback_model_ids?: string[];
     max_pages_per_ingest?: number;
     extraction_granularity?: 'focused' | 'standard' | 'exhaustive';
     content_instructions?: string;
@@ -146,6 +148,8 @@ export function updateKnowledgeBase(id: string, data: {
     faq_config?: any;
     wiki_config?: {
       synthesis_model_id?: string;
+      synthesis_fallback_model_id?: string;
+      synthesis_fallback_model_ids?: string[];
       max_pages_per_ingest?: number;
       extraction_granularity?: 'focused' | 'standard' | 'exhaustive';
       content_instructions?: string;

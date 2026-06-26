@@ -723,6 +723,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       llmModelId: '',
       embeddingModelId: '',
       wikiSynthesisModelId: '',
+      wikiSynthesisModelIds: [''] as string[],
     },
     chunkingConfig: {
       chunkSize: 512,
@@ -775,6 +776,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
     },
     wikiConfig: {
       synthesisModelId: '',
+      synthesisModelIds: [''] as string[],
       maxPagesPerIngest: 0,
       extractionGranularity: 'standard' as 'focused' | 'standard' | 'exhaustive',
       contentInstructions: '',
@@ -844,7 +846,8 @@ const loadKBData = async () => {
       modelConfig: {
         llmModelId: kb.summary_model_id || '',
         embeddingModelId: kb.embedding_model_id || '',
-        wikiSynthesisModelId: kb.wiki_config?.synthesis_model_id || ''
+        wikiSynthesisModelId: kb.wiki_config?.synthesis_model_id || '',
+        wikiSynthesisModelIds: normalizeWikiConfigForEdit(kb.wiki_config)
       },
       chunkingConfig: {
         chunkSize: kb.chunking_config?.chunk_size || 512,
@@ -867,7 +870,7 @@ const loadKBData = async () => {
       storageProvider: (kb.storage_provider_config?.provider || kb.storage_config?.provider || 'local') as string,
       multimodalConfig: {
         enabled: !!kb.vlm_config?.enabled,
-        vllmModelIds: normalizeVLMModelIds(kb.vlm_config),
+        vllmModelIds: normalizeVLMConfigForEdit(kb.vlm_config),
         descriptionLanguage: kb.vlm_config?.description_language || '',
         customInstructions: kb.vlm_config?.custom_instructions || ''
       },
@@ -894,6 +897,7 @@ const loadKBData = async () => {
       },
       wikiConfig: {
         synthesisModelId: kb.wiki_config?.synthesis_model_id || '',
+        synthesisModelIds: normalizeWikiConfigForEdit(kb.wiki_config),
         maxPagesPerIngest: kb.wiki_config?.max_pages_per_ingest || 0,
         extractionGranularity: (
           kb.wiki_config?.extraction_granularity === 'focused' ||
@@ -938,7 +942,20 @@ const loadKBData = async () => {
 // 处理配置更新
 const handleModelConfigUpdate = (config: any) => {
   if (formData.value) {
-    formData.value.modelConfig = { ...config }
+    const wikiSynthesisModelIds = normalizeWikiModelIdsForEdit(
+      config?.wikiSynthesisModelIds || [config?.wikiSynthesisModelId || ''],
+      true,
+    )
+    formData.value.modelConfig = {
+      ...config,
+      wikiSynthesisModelId: wikiSynthesisModelIds[0] || '',
+      wikiSynthesisModelIds
+    }
+    formData.value.wikiConfig = {
+      ...formData.value.wikiConfig,
+      synthesisModelId: wikiSynthesisModelIds[0] || '',
+      synthesisModelIds: wikiSynthesisModelIds
+    }
   }
 }
 
@@ -1031,7 +1048,27 @@ const handleMultimodalToggle = () => {
   }
 }
 
-const normalizeVLMModelIds = (config?: any): string[] => {
+const MAX_VLM_MODELS = 5
+const MAX_WIKI_SYNTHESIS_MODELS = 5
+
+const normalizeModelChainIdsForEdit = (modelIds: any[], preserveEmpty = true, maxModels = 5): string[] => {
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const rawId of modelIds || []) {
+    const id = String(rawId || '').trim()
+    if (id && !seen.has(id)) {
+      seen.add(id)
+      ids.push(id)
+    } else if (preserveEmpty) {
+      ids.push('')
+    }
+    if (ids.length >= maxModels) break
+  }
+
+  return ids.length > 0 ? ids : ['']
+}
+
+const getVLMConfigModelIds = (config?: any): string[] => {
   const rawIds = [
     config?.model_id,
     ...(Array.isArray(config?.fallback_model_ids) ? config.fallback_model_ids : []),
@@ -1039,24 +1076,23 @@ const normalizeVLMModelIds = (config?: any): string[] => {
   if (!Array.isArray(config?.fallback_model_ids) && config?.fallback_model_id) {
     rawIds.push(config.fallback_model_id)
   }
-  const seen = new Set<string>()
-  const ids = rawIds
-    .map((id: any) => String(id || '').trim())
-    .filter((id: string) => {
-      if (!id || seen.has(id)) return false
-      seen.add(id)
-      return true
-    })
-    .slice(0, 5)
-  return ids.length > 0 ? ids : ['']
+  return rawIds
+}
+
+const normalizeVLMModelIdsForEdit = (modelIds: any[], preserveEmpty = true): string[] => {
+  return normalizeModelChainIdsForEdit(modelIds, preserveEmpty, MAX_VLM_MODELS)
+}
+
+const normalizeVLMConfigForEdit = (config?: any): string[] => {
+  return normalizeVLMModelIdsForEdit(getVLMConfigModelIds(config), false)
+}
+
+const normalizeVLMModelIdsForPayload = (modelIds: string[]): string[] => {
+  return normalizeVLMModelIdsForEdit(modelIds, false).filter(Boolean).slice(0, MAX_VLM_MODELS)
 }
 
 const buildVLMConfigPayload = (enabled: boolean, modelIds: string[]) => {
-  const ids = normalizeVLMModelIds({
-    model_id: modelIds[0] || '',
-    fallback_model_ids: modelIds.slice(1),
-  })
-  const activeIds = enabled ? ids.filter(Boolean).slice(0, 5) : []
+  const activeIds = enabled ? normalizeVLMModelIdsForPayload(modelIds) : []
   return {
     enabled,
     model_id: activeIds[0] || '',
@@ -1065,12 +1101,61 @@ const buildVLMConfigPayload = (enabled: boolean, modelIds: string[]) => {
   }
 }
 
+const getWikiConfigModelIds = (config?: any): string[] => {
+  const rawIds = [
+    config?.synthesis_model_id || '',
+    ...(Array.isArray(config?.synthesis_fallback_model_ids) ? config.synthesis_fallback_model_ids : []),
+  ]
+  if (!Array.isArray(config?.synthesis_fallback_model_ids) && config?.synthesis_fallback_model_id) {
+    rawIds.push(config.synthesis_fallback_model_id)
+  }
+  return rawIds
+}
+
+const normalizeWikiModelIdsForEdit = (modelIds: any[], preserveEmpty = true): string[] => {
+  return normalizeModelChainIdsForEdit(modelIds, preserveEmpty, MAX_WIKI_SYNTHESIS_MODELS)
+}
+
+const normalizeWikiConfigForEdit = (config?: any): string[] => {
+  return normalizeWikiModelIdsForEdit(getWikiConfigModelIds(config), true)
+}
+
+const normalizeWikiFallbackIdsForPayload = (modelIds: any[], primaryId: string): string[] => {
+  const seen = new Set<string>()
+  if (primaryId) seen.add(primaryId)
+  const ids: string[] = []
+  for (const raw of modelIds || []) {
+    const id = String(raw || '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+    if (ids.length >= MAX_WIKI_SYNTHESIS_MODELS - 1) break
+  }
+  return ids
+}
+
+const buildWikiConfigPayload = () => {
+  const modelIds = normalizeWikiModelIdsForEdit(
+    formData.value?.modelConfig?.wikiSynthesisModelIds ||
+      [formData.value?.modelConfig?.wikiSynthesisModelId || ''],
+    true,
+  )
+  const primaryId = String(modelIds[0] || '').trim()
+  const fallbackIds = normalizeWikiFallbackIdsForPayload(modelIds.slice(1), primaryId)
+  return {
+    synthesis_model_id: primaryId,
+    synthesis_fallback_model_id: fallbackIds[0] || '',
+    synthesis_fallback_model_ids: fallbackIds,
+    max_pages_per_ingest: formData.value?.wikiConfig?.maxPagesPerIngest || 0,
+    extraction_granularity: formData.value?.wikiConfig?.extractionGranularity || 'standard',
+    content_instructions: formData.value?.wikiConfig?.contentInstructions || '',
+    extraction_instructions: formData.value?.wikiConfig?.extractionInstructions || '',
+  }
+}
+
 const handleMultimodalVLLMChainChange = (modelIds: string[]) => {
   if (formData.value) {
-    formData.value.multimodalConfig.vllmModelIds = normalizeVLMModelIds({
-      model_id: modelIds[0] || '',
-      fallback_model_ids: modelIds.slice(1),
-    })
+    formData.value.multimodalConfig.vllmModelIds = normalizeVLMModelIdsForEdit(modelIds, true)
   }
 }
 
@@ -1293,13 +1378,7 @@ const buildSubmitData = () => {
   // Wiki enablement is carried solely by indexing_strategy.wiki_enabled.
   // wiki_config only holds wiki-specific tunables.
   if (formData.value.type !== 'faq') {
-    data.wiki_config = {
-      synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
-      max_pages_per_ingest: formData.value.wikiConfig?.maxPagesPerIngest || 0,
-      extraction_granularity: formData.value.wikiConfig?.extractionGranularity || 'standard',
-      content_instructions: formData.value.wikiConfig?.contentInstructions || '',
-      extraction_instructions: formData.value.wikiConfig?.extractionInstructions || '',
-    }
+    data.wiki_config = buildWikiConfigPayload()
   }
 
   // Send indexing strategy
@@ -1393,13 +1472,7 @@ const doSubmit = async () => {
         }
       }
       if (formData.value.wikiConfig && formData.value.type !== 'faq') {
-        updateConfig.wiki_config = {
-          synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
-          max_pages_per_ingest: formData.value.wikiConfig.maxPagesPerIngest || 0,
-          extraction_granularity: formData.value.wikiConfig.extractionGranularity || 'standard',
-          content_instructions: formData.value.wikiConfig.contentInstructions || '',
-          extraction_instructions: formData.value.wikiConfig.extractionInstructions || '',
-        }
+        updateConfig.wiki_config = data.wiki_config
       }
       if (formData.value.type !== 'faq') {
         updateConfig.indexing_strategy = {

@@ -8,11 +8,11 @@
       <div class="vlm-chain-row__label">
         <span class="vlm-chain-row__badge">{{ index + 1 }}</span>
         <span>{{ index === 0 ? resolvedPrimaryLabel : fallbackLabel(index) }}</span>
-        <span v-if="index === 0" class="required">*</span>
+        <span v-if="index === 0 && primaryRequired" class="required">*</span>
       </div>
       <div class="vlm-chain-row__selector">
         <ModelSelector
-          model-type="VLLM"
+          :model-type="modelType"
           :selected-model-id="modelId"
           :all-models="allModels"
           :status="index === 0 ? status : 'default'"
@@ -57,10 +57,10 @@
         :disabled="localModelIds.length >= maxModels"
         @click="addFallback"
       >
-        {{ t('knowledgeEditor.vlmChain.addFallback') }}
+        {{ resolvedAddFallbackLabel }}
       </t-button>
       <span class="vlm-chain-footer__hint">
-        {{ t('knowledgeEditor.vlmChain.hint', { max: maxModels }) }}
+        {{ resolvedHint }}
       </span>
     </div>
   </div>
@@ -74,22 +74,32 @@ import ModelSelector from '@/components/ModelSelector.vue'
 
 const props = withDefaults(defineProps<{
   modelIds?: string[]
+  modelType?: 'KnowledgeQA' | 'Embedding' | 'Rerank' | 'VLLM' | 'ASR'
   allModels?: any[]
   maxModels?: number
   status?: 'default' | 'success' | 'warning' | 'error'
+  primaryRequired?: boolean
   primaryLabel?: string
   fallbackLabelPrefix?: string
   primaryPlaceholder?: string
   fallbackPlaceholder?: string
+  addFallbackLabel?: string
+  hint?: string
+  duplicateWarning?: string
 }>(), {
   modelIds: () => [''],
+  modelType: 'VLLM',
   allModels: () => [],
   maxModels: 5,
   status: 'default',
+  primaryRequired: true,
   primaryLabel: '',
   fallbackLabelPrefix: '',
   primaryPlaceholder: '',
   fallbackPlaceholder: '',
+  addFallbackLabel: '',
+  hint: '',
+  duplicateWarning: '',
 })
 
 const { t } = useI18n()
@@ -110,6 +120,8 @@ const resolvedPrimaryLabel = computed(() => props.primaryLabel || t('knowledgeEd
 const resolvedFallbackLabelPrefix = computed(() => props.fallbackLabelPrefix || t('knowledgeEditor.vlmChain.fallbackLabelPrefix'))
 const resolvedPrimaryPlaceholder = computed(() => props.primaryPlaceholder || t('knowledgeEditor.vlmChain.primaryPlaceholder'))
 const resolvedFallbackPlaceholder = computed(() => props.fallbackPlaceholder || t('knowledgeEditor.vlmChain.fallbackPlaceholder'))
+const resolvedAddFallbackLabel = computed(() => props.addFallbackLabel || t('knowledgeEditor.vlmChain.addFallback'))
+const resolvedHint = computed(() => props.hint || t('knowledgeEditor.vlmChain.hint', { max: props.maxModels }))
 
 function fallbackLabel(index: number) {
   return `${resolvedFallbackLabelPrefix.value} ${index}`
@@ -138,7 +150,7 @@ function updateModel(index: number, value: string) {
   const next = [...localModelIds.value]
   const trimmed = (value || '').trim()
   if (trimmed && next.some((id, i) => i !== index && id === trimmed)) {
-    MessagePlugin.warning(t('knowledgeEditor.vlmChain.duplicateWarning'))
+    MessagePlugin.warning(props.duplicateWarning || t('knowledgeEditor.vlmChain.duplicateWarning'))
     return
   }
   next[index] = trimmed

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -637,10 +639,14 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 	}
 
 	// Check if this document has extracted images that will be processed asynchronously
+	multimodalImages := options.StoredImages
+	if options.EnableMultimodel && len(multimodalImages) > 0 {
+		multimodalImages = filterMultimodalImages(ctx, multimodalImages)
+	}
 	isImage := IsImageType(knowledge.FileType)
 	isVideo := IsVideoType(knowledge.FileType)
-	pendingMultimodal := isImage && options.EnableMultimodel && len(options.StoredImages) > 0
-	pendingPDFMultimodal := !isImage && !isVideo && options.EnableMultimodel && len(options.StoredImages) > 0
+	pendingMultimodal := isImage && options.EnableMultimodel && len(multimodalImages) > 0
+	pendingPDFMultimodal := !isImage && !isVideo && options.EnableMultimodel && len(multimodalImages) > 0
 
 	now := time.Now()
 	finalizeIndexedKnowledgeState(
@@ -656,37 +662,22 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 	}
 
 	// Enqueue multimodal tasks for images (async, non-blocking)
-	if options.EnableMultimodel && len(options.StoredImages) > 0 {
+	if options.EnableMultimodel && len(multimodalImages) > 0 {
 		s.beginStage(ctx, knowledge.ID, types.StageMultimodal, types.JSONMap{
-			"image_count":    len(options.StoredImages),
-			"enable_ocr":     true,
-			"enable_caption": true,
+			"image_count":        len(multimodalImages),
+			"source_image_count": len(options.StoredImages),
+			"skipped_images":     len(options.StoredImages) - len(multimodalImages),
+			"enable_ocr":         true,
+			"enable_caption":     true,
 		})
-		s.enqueueImageMultimodalTasks(ctx, knowledge, kb, options.StoredImages, chunks, options.Metadata)
+		s.enqueueImageMultimodalTasks(ctx, knowledge, kb, multimodalImages, chunks, options.Metadata)
 	} else {
-		s.skipStage(ctx, knowledge.ID, types.StageMultimodal, "skipped")
-		// If there are no multimodal tasks, enqueue the post process task immediately
-		lang, _ := types.LanguageFromContext(ctx)
-		postProcessPayload := types.KnowledgePostProcessPayload{
-			TenantID:        knowledge.TenantID,
-			KnowledgeID:     knowledge.ID,
-			KnowledgeBaseID: knowledge.KnowledgeBaseID,
-			Language:        lang,
-			Attempt:         attemptFromCtx(ctx),
+		reason := "skipped"
+		if options.EnableMultimodel && len(options.StoredImages) > 0 {
+			reason = "all_images_filtered"
 		}
-		langfuse.InjectTracing(ctx, &postProcessPayload)
-		payloadBytes, err := json.Marshal(postProcessPayload)
-		if err == nil {
-			task := asynq.NewTask(types.TypeKnowledgePostProcess, payloadBytes,
-				knowledgePostProcessTaskOptions()...)
-			if _, err := s.task.Enqueue(task); err != nil {
-				logger.Errorf(ctx, "Failed to enqueue knowledge post process task: %v", err)
-			} else {
-				logger.Infof(ctx, "Enqueued knowledge post process task for %s", knowledge.ID)
-			}
-		} else {
-			logger.Errorf(ctx, "Failed to marshal knowledge post process payload: %v", err)
-		}
+		s.skipStage(ctx, knowledge.ID, types.StageMultimodal, reason)
+		s.enqueueKnowledgePostProcessTask(ctx, knowledge, kb, attemptFromCtx(ctx))
 	}
 
 	// Update tenant's storage usage
@@ -3657,6 +3648,135 @@ func (s *knowledgeService) failKnowledge(
 	return nil, fmt.Errorf(format, args...)
 }
 
+const (
+	defaultMultimodalMaxImagesPerDocument = 256
+	defaultMultimodalMinImageSide         = 32
+	defaultMultimodalMaxImageAspectRatio  = 20.0
+)
+
+func multimodalMaxImagesPerDocument() int {
+	return envInt("WEKNORA_MULTIMODAL_MAX_IMAGES_PER_DOCUMENT", defaultMultimodalMaxImagesPerDocument)
+}
+
+func multimodalMinImageSide() int {
+	return envInt("WEKNORA_MULTIMODAL_MIN_IMAGE_SIDE", defaultMultimodalMinImageSide)
+}
+
+func multimodalMaxImageAspectRatio() float64 {
+	return envFloat("WEKNORA_MULTIMODAL_MAX_IMAGE_ASPECT_RATIO", defaultMultimodalMaxImageAspectRatio)
+}
+
+func envInt(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
+}
+
+func envFloat(name string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
+}
+
+func filterMultimodalImages(ctx context.Context, images []docparser.StoredImage) []docparser.StoredImage {
+	if len(images) == 0 {
+		return nil
+	}
+
+	maxImages := multimodalMaxImagesPerDocument()
+	minSide := multimodalMinImageSide()
+	maxAspectRatio := multimodalMaxImageAspectRatio()
+	filtered := make([]docparser.StoredImage, 0, len(images))
+	skippedSmall := 0
+	skippedAspect := 0
+	skippedLimit := 0
+
+	for _, img := range images {
+		skip, reason := shouldSkipMultimodalImage(img, minSide, maxAspectRatio)
+		if skip {
+			switch reason {
+			case "small_side":
+				skippedSmall++
+			case "extreme_aspect_ratio":
+				skippedAspect++
+			}
+			continue
+		}
+		if maxImages > 0 && len(filtered) >= maxImages {
+			skippedLimit++
+			continue
+		}
+		filtered = append(filtered, img)
+	}
+
+	if skippedSmall > 0 || skippedAspect > 0 || skippedLimit > 0 {
+		logger.Infof(ctx,
+			"[KnowledgeProcess] Filtered multimodal images: source=%d kept=%d small_side=%d extreme_aspect=%d over_limit=%d max_images=%d min_side=%d max_aspect=%.2f",
+			len(images), len(filtered), skippedSmall, skippedAspect, skippedLimit, maxImages, minSide, maxAspectRatio)
+	}
+	return filtered
+}
+
+func shouldSkipMultimodalImage(img docparser.StoredImage, minSide int, maxAspectRatio float64) (bool, string) {
+	if img.Width <= 0 || img.Height <= 0 {
+		return false, ""
+	}
+	if minSide > 0 && (img.Width < minSide || img.Height < minSide) {
+		return true, "small_side"
+	}
+	if maxAspectRatio > 0 {
+		longSide := img.Width
+		shortSide := img.Height
+		if shortSide > longSide {
+			longSide, shortSide = shortSide, longSide
+		}
+		if shortSide > 0 && float64(longSide)/float64(shortSide) > maxAspectRatio {
+			return true, "extreme_aspect_ratio"
+		}
+	}
+	return false, ""
+}
+
+func (s *knowledgeService) enqueueKnowledgePostProcessTask(ctx context.Context, knowledge *types.Knowledge, kb *types.KnowledgeBase, attempt int) {
+	if s.task == nil || knowledge == nil || kb == nil {
+		return
+	}
+
+	lang, _ := types.LanguageFromContext(ctx)
+	postProcessPayload := types.KnowledgePostProcessPayload{
+		TenantID:        knowledge.TenantID,
+		KnowledgeID:     knowledge.ID,
+		KnowledgeBaseID: kb.ID,
+		Language:        lang,
+		Attempt:         attempt,
+	}
+	langfuse.InjectTracing(ctx, &postProcessPayload)
+	payloadBytes, err := json.Marshal(postProcessPayload)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to marshal knowledge post process payload: %v", err)
+		return
+	}
+
+	task := asynq.NewTask(types.TypeKnowledgePostProcess, payloadBytes, asynq.Queue(types.QueueDefault), asynq.MaxRetry(3))
+	if _, err := s.task.Enqueue(task); err != nil {
+		logger.Errorf(ctx, "Failed to enqueue knowledge post process task: %v", err)
+	} else {
+		logger.Infof(ctx, "Enqueued knowledge post process task for %s", knowledge.ID)
+	}
+}
+
 // enqueueImageMultimodalTasks enqueues asynq tasks for multimodal image processing.
 func (s *knowledgeService) enqueueImageMultimodalTasks(
 	ctx context.Context,
@@ -3671,13 +3791,12 @@ func (s *knowledgeService) enqueueImageMultimodalTasks(
 	}
 
 	attempt := attemptFromCtx(ctx)
-	redisKey := fmt.Sprintf("multimodal:pending:%s", knowledge.ID)
-	if s.redisClient != nil {
-		if err := s.redisClient.Set(ctx, redisKey, len(images), 24*time.Hour).Err(); err != nil {
-			logger.Warnf(ctx, "Failed to set multimodal pending count for %s: %v", knowledge.ID, err)
-		}
+	lang, _ := types.LanguageFromContext(ctx)
+	type pendingTask struct {
+		image        docparser.StoredImage
+		payloadBytes []byte
 	}
-
+	tasks := make([]pendingTask, 0, len(images))
 	for idx, img := range images {
 		// Match image to the ParsedChunk whose content contains the image URL.
 		// ChunkID was populated by processChunks with the real DB UUID.
@@ -3692,7 +3811,6 @@ func (s *knowledgeService) enqueueImageMultimodalTasks(
 			chunkID = chunks[0].ChunkID
 		}
 
-		lang, _ := types.LanguageFromContext(ctx)
 		payload := types.ImageMultimodalPayload{
 			TenantID:        knowledge.TenantID,
 			KnowledgeID:     knowledge.ID,
@@ -3714,13 +3832,54 @@ func (s *knowledgeService) enqueueImageMultimodalTasks(
 			continue
 		}
 
-		task := asynq.NewTask(types.TypeImageMultimodal, payloadBytes,
-			asynq.Queue(types.QueueMultimodal), asynq.MaxRetry(3), asynq.Timeout(30*time.Minute))
-		if _, err := s.task.Enqueue(task); err != nil {
-			logger.Warnf(ctx, "Failed to enqueue image multimodal task for %s: %v", img.ServingURL, err)
-		} else {
-			logger.Infof(ctx, "Enqueued image:multimodal task for %s", img.ServingURL)
+		tasks = append(tasks, pendingTask{image: img, payloadBytes: payloadBytes})
+	}
+
+	if len(tasks) == 0 {
+		s.skipStage(ctx, knowledge.ID, types.StageMultimodal, "no_enqueued_images")
+		s.enqueueKnowledgePostProcessTask(ctx, knowledge, kb, attempt)
+		return
+	}
+
+	redisKey := fmt.Sprintf("multimodal:pending:%s", knowledge.ID)
+	if s.redisClient != nil {
+		if err := s.redisClient.Set(ctx, redisKey, len(tasks), 24*time.Hour).Err(); err != nil {
+			logger.Warnf(ctx, "Failed to set multimodal pending count for %s: %v", knowledge.ID, err)
 		}
+	}
+
+	postprocessEnqueued := false
+	releasePending := func(reason string) {
+		if s.redisClient == nil {
+			return
+		}
+		pendingCount, err := s.redisClient.Decr(ctx, redisKey).Result()
+		if err != nil {
+			logger.Warnf(ctx, "Failed to release multimodal pending count for %s after %s: %v", knowledge.ID, reason, err)
+			return
+		}
+		if pendingCount <= 0 {
+			s.redisClient.Del(ctx, redisKey)
+			if !postprocessEnqueued {
+				postprocessEnqueued = true
+				s.enqueueKnowledgePostProcessTask(ctx, knowledge, kb, attempt)
+			}
+		}
+	}
+
+	enqueued := 0
+	for _, pending := range tasks {
+		task := asynq.NewTask(types.TypeImageMultimodal, pending.payloadBytes, asynq.Queue(types.QueueMultimodal))
+		if _, err := s.task.Enqueue(task); err != nil {
+			logger.Warnf(ctx, "Failed to enqueue image multimodal task for %s: %v", pending.image.ServingURL, err)
+			releasePending("enqueue_failure")
+		} else {
+			enqueued++
+			logger.Infof(ctx, "Enqueued image:multimodal task for %s", pending.image.ServingURL)
+		}
+	}
+	if enqueued == 0 && !postprocessEnqueued {
+		s.enqueueKnowledgePostProcessTask(ctx, knowledge, kb, attempt)
 	}
 }
 

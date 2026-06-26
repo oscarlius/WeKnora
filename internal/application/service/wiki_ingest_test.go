@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/agent"
 	"github.com/Tencent/WeKnora/internal/models/chat"
@@ -39,6 +40,22 @@ func TestSlugify(t *testing.T) {
 				t.Errorf("slugify(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWikiPageSpanName(t *testing.T) {
+	shortSlug := "entity/acme"
+	if got, want := wikiPageSpanName(shortSlug), "postprocess.wiki.page[entity/acme]"; got != want {
+		t.Fatalf("short span name = %q, want %q", got, want)
+	}
+
+	longSlug := "entity/lian-yun-gang-zi-zhu-ran-ji-shi-yan-he-ying-yong-shi-fan-ji-di"
+	got := wikiPageSpanName(longSlug)
+	if utf8.RuneCountInString(got) > spanNameMaxRunes {
+		t.Fatalf("span name length = %d, want <= %d (%q)", utf8.RuneCountInString(got), spanNameMaxRunes, got)
+	}
+	if !strings.HasPrefix(got, "postprocess.wiki.page[entity/") || !strings.Contains(got, "~") || !strings.HasSuffix(got, "]") {
+		t.Fatalf("span name does not preserve prefix/hash/suffix: %q", got)
 	}
 }
 
@@ -334,6 +351,43 @@ func TestGenerateWithTemplateMasksImageURLsBeforeLLM(t *testing.T) {
 	}
 }
 
+func TestGenerateWithTemplateFallsBackToNextSynthesisModel(t *testing.T) {
+	primary := &templateCaptureChatModel{
+		modelID: "primary",
+		err:     errors.New("status 500: upstream failed"),
+	}
+	fallback := &templateCaptureChatModel{
+		modelID:  "fallback",
+		response: "fallback result",
+	}
+	service := &wikiIngestService{}
+
+	got, err := service.generateWithTemplate(
+		context.Background(),
+		&wikiSynthesisModelChain{
+			requestedModelIDs: []string{"primary", "fallback"},
+			candidates: []wikiSynthesisModelCandidate{
+				{model: primary, modelID: "primary"},
+				{model: fallback, modelID: "fallback"},
+			},
+		},
+		`Content={{.Content}}`,
+		map[string]string{"Content": "hello"},
+	)
+	if err != nil {
+		t.Fatalf("generateWithTemplate() error = %v", err)
+	}
+	if got != "fallback result" {
+		t.Fatalf("got %q, want fallback result", got)
+	}
+	if primary.calls != wikiLLMMaxAttempts {
+		t.Fatalf("primary calls = %d, want %d", primary.calls, wikiLLMMaxAttempts)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
+	}
+}
+
 type templateCaptureChatModel struct {
 	prompt   string
 	response string
@@ -341,6 +395,9 @@ type templateCaptureChatModel struct {
 	options  chat.ChatOptions
 	purpose  string
 	prefix   string
+	err      error
+	modelID  string
+	calls    int
 }
 
 func (m *templateCaptureChatModel) Chat(
@@ -348,6 +405,7 @@ func (m *templateCaptureChatModel) Chat(
 	messages []chat.Message,
 	opts *chat.ChatOptions,
 ) (*types.ChatResponse, error) {
+	m.calls++
 	if len(messages) > 0 {
 		m.prompt = messages[0].Content
 	}
@@ -356,6 +414,9 @@ func (m *templateCaptureChatModel) Chat(
 		m.options = *opts
 	}
 	m.purpose, m.prefix = types.LLMCallMetadataFromContext(ctx)
+	if m.err != nil {
+		return nil, m.err
+	}
 	return &types.ChatResponse{Content: m.response}, nil
 }
 
@@ -368,7 +429,12 @@ func (m *templateCaptureChatModel) ChatStream(
 }
 
 func (m *templateCaptureChatModel) GetModelName() string { return "capture" }
-func (m *templateCaptureChatModel) GetModelID() string   { return "capture" }
+func (m *templateCaptureChatModel) GetModelID() string {
+	if m.modelID != "" {
+		return m.modelID
+	}
+	return "capture"
+}
 
 func TestGenerateWikiPageModifyUsesCacheableMessageLayout(t *testing.T) {
 	model := &templateCaptureChatModel{response: "SUMMARY: page\n# Alpha"}
