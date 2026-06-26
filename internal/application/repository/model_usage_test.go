@@ -29,6 +29,15 @@ func newModelUsageTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func createModelUsageEvents(t *testing.T, db *gorm.DB, count int, event types.ModelUsageEvent) {
+	t.Helper()
+	events := make([]types.ModelUsageEvent, 0, count)
+	for i := 0; i < count; i++ {
+		events = append(events, event)
+	}
+	require.NoError(t, db.Create(&events).Error)
+}
+
 func TestModelUsageReportReturnsEmptySlices(t *testing.T) {
 	db := newModelUsageTestDB(t)
 	repo := NewModelUsageRepository(db)
@@ -54,7 +63,7 @@ func TestModelUsageReportFiltersTenantAndAggregates(t *testing.T) {
 	repo := NewModelUsageRepository(db)
 	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
 
-	require.NoError(t, db.Create(&types.ModelUsageEvent{
+	createModelUsageEvents(t, db, 100, types.ModelUsageEvent{
 		TenantID:         1,
 		ModelID:          "model-chat",
 		ModelName:        "gpt-test",
@@ -69,7 +78,7 @@ func TestModelUsageReportFiltersTenantAndAggregates(t *testing.T) {
 		InputItems:       1,
 		Success:          true,
 		CreatedAt:        now.Add(-time.Minute),
-	}).Error)
+	})
 	require.NoError(t, db.Create(&types.ModelUsageEvent{
 		TenantID:    2,
 		ModelID:     "other-tenant-model",
@@ -83,15 +92,57 @@ func TestModelUsageReportFiltersTenantAndAggregates(t *testing.T) {
 	report, err := repo.Report(context.Background(), 1, types.ModelUsageQuery{
 		Start:      now.Add(-time.Hour),
 		End:        now,
-		BucketSize: time.Minute,
+		BucketSize: time.Hour,
 	})
 	require.NoError(t, err)
 	require.Len(t, report.Models, 1)
-	assert.Equal(t, int64(1), report.Summary.TotalCalls)
-	assert.Equal(t, int64(15), report.Summary.TotalTokens)
+	assert.Equal(t, int64(100), report.Summary.TotalCalls)
+	assert.Equal(t, int64(1500), report.Summary.TotalTokens)
 	assert.Equal(t, "model-chat", report.Models[0].ModelID)
-	assert.Equal(t, int64(15), report.Models[0].TotalTokens)
+	assert.Equal(t, int64(1500), report.Models[0].TotalTokens)
 	assert.Equal(t, float64(1), report.Models[0].SuccessRate)
-	assert.NotEmpty(t, report.Timeline)
-	assert.Len(t, report.RecentEvents, 1)
+	require.Len(t, report.Timeline, 1)
+	assert.Equal(t, int64(100), report.Timeline[0].Calls)
+	assert.Equal(t, int64(1500), report.Timeline[0].TotalTokens)
+	assert.Len(t, report.RecentEvents, 30)
+}
+
+func TestModelUsageTimelineSkipsBucketsBelowCallThreshold(t *testing.T) {
+	db := newModelUsageTestDB(t)
+	repo := NewModelUsageRepository(db)
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+
+	baseEvent := types.ModelUsageEvent{
+		TenantID:         1,
+		ModelID:          "model-chat",
+		ModelName:        "gpt-test",
+		ModelType:        types.ModelTypeKnowledgeQA,
+		ModelSource:      types.ModelSourceRemote,
+		Provider:         "openai",
+		RequestKind:      "chat.completion",
+		UsageSource:      types.ModelUsageSourceProvider,
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+		InputItems:       1,
+		Success:          true,
+	}
+
+	smallBucketEvent := baseEvent
+	smallBucketEvent.CreatedAt = now.Add(-90 * time.Minute)
+	createModelUsageEvents(t, db, 99, smallBucketEvent)
+
+	visibleBucketEvent := baseEvent
+	visibleBucketEvent.CreatedAt = now.Add(-10 * time.Minute)
+	createModelUsageEvents(t, db, 100, visibleBucketEvent)
+
+	report, err := repo.Report(context.Background(), 1, types.ModelUsageQuery{
+		Start:      now.Add(-2 * time.Hour),
+		End:        now,
+		BucketSize: time.Hour,
+	})
+	require.NoError(t, err)
+	require.Len(t, report.Timeline, 1)
+	assert.Equal(t, int64(100), report.Timeline[0].Calls)
+	assert.Equal(t, now.Add(-time.Hour).Truncate(time.Hour), report.Timeline[0].BucketStart)
 }
