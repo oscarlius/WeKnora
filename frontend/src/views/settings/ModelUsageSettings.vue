@@ -69,19 +69,41 @@
       </div>
 
       <template v-else>
-        <section class="usage-panel">
+        <section class="usage-panel chart-panel">
           <div class="panel-header">
             <h3>{{ t('modelUsage.timeline.title') }}</h3>
             <span>{{ t('modelUsage.timeline.subtitle') }}</span>
           </div>
-          <div class="timeline-list">
-            <div v-for="bucket in bucketRows" :key="bucket.bucket_start" class="timeline-row">
-              <span class="timeline-time">{{ formatTime(bucket.bucket_start) }}</span>
-              <div class="timeline-track">
-                <div class="timeline-fill" :style="{ width: `${bucketWidth(bucket.total_tokens)}%` }" />
+          <div v-if="chartBuckets.length" class="usage-chart">
+            <div class="chart-plot">
+              <div v-for="bucket in chartBuckets" :key="bucket.bucket_start" class="chart-column">
+                <span class="chart-value">{{ formatCompactNumber(bucket.total_tokens) }}</span>
+                <div
+                  class="chart-bar"
+                  :style="{ height: `${barHeight(bucket.total_tokens)}%` }"
+                  :title="bucketTooltip(bucket)"
+                >
+                  <div
+                    v-for="segment in bucket.segments"
+                    :key="segment.model_key"
+                    class="chart-segment"
+                    :style="{ height: `${segment.percent}%`, backgroundColor: segment.color }"
+                    :title="segmentTooltip(bucket, segment)"
+                  />
+                </div>
+                <span class="chart-time">{{ formatBucketLabel(bucket.bucket_start) }}</span>
               </div>
-              <span class="timeline-value">{{ formatNumber(bucket.total_tokens) }}</span>
             </div>
+            <div class="chart-legend">
+              <div v-for="item in modelLegend" :key="item.model_key" class="legend-item">
+                <span class="legend-swatch" :style="{ backgroundColor: item.color }" />
+                <span class="legend-name">{{ item.model_name }}</span>
+                <span class="legend-value">{{ formatNumber(item.total_tokens) }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="chart-empty">
+            <t-empty :description="t('modelUsage.empty')" />
           </div>
         </section>
 
@@ -167,11 +189,32 @@ import {
   type ModelUsageModelStats,
   type ModelUsageRange,
   type ModelUsageReport,
-  type ModelUsageTimelinePoint,
   type ModelUsageType,
 } from '@/api/model'
 
 type ModelUsageRow = ModelUsageModelStats & { row_key: string }
+type ChartSegment = {
+  model_key: string
+  model_name: string
+  total_tokens: number
+  calls: number
+  error_count: number
+  percent: number
+  color: string
+}
+type ChartBucket = {
+  bucket_start: string
+  total_tokens: number
+  calls: number
+  error_count: number
+  segments: ChartSegment[]
+}
+type ChartLegendItem = {
+  model_key: string
+  model_name: string
+  total_tokens: number
+  color: string
+}
 
 const { t, locale } = useI18n()
 
@@ -221,26 +264,115 @@ const modelRows = computed<ModelUsageRow[]>(() =>
   })),
 )
 
-const bucketRows = computed(() => {
-  const buckets = new Map<string, { bucket_start: string; total_tokens: number; calls: number; error_count: number }>()
+const chartPalette = [
+  '#2f7cf6',
+  '#00a870',
+  '#f5a623',
+  '#e34d59',
+  '#7c3aed',
+  '#14b8a6',
+  '#f97316',
+  '#64748b',
+  '#d946ef',
+  '#0ea5e9',
+  '#84cc16',
+  '#ef4444',
+]
+
+const modelNameMap = computed(() => {
+  const names = new Map<string, string>()
+  for (const row of report.value.models) {
+    names.set(modelUsageKey(row.model_id, row.model_name, row.model_type), row.display_name || row.model_name || '-')
+  }
+  return names
+})
+
+const modelColorMap = computed(() => {
+  const colors = new Map<string, string>()
+  const keys = new Set<string>()
+  for (const row of report.value.models) {
+    keys.add(modelUsageKey(row.model_id, row.model_name, row.model_type))
+  }
+  for (const point of report.value.timeline) {
+    keys.add(modelUsageKey(point.model_id, point.model_name, point.model_type))
+  }
+  Array.from(keys).forEach((key, index) => {
+    colors.set(key, chartPalette[index % chartPalette.length])
+  })
+  return colors
+})
+
+const chartBuckets = computed<ChartBucket[]>(() => {
+  const buckets = new Map<
+    string,
+    {
+      bucket_start: string
+      total_tokens: number
+      calls: number
+      error_count: number
+      models: Map<string, Omit<ChartSegment, 'percent' | 'color'>>
+    }
+  >()
   for (const point of report.value.timeline) {
     const existing = buckets.get(point.bucket_start) || {
       bucket_start: point.bucket_start,
       total_tokens: 0,
       calls: 0,
       error_count: 0,
+      models: new Map<string, Omit<ChartSegment, 'percent' | 'color'>>(),
     }
     existing.total_tokens += point.total_tokens
     existing.calls += point.calls
     existing.error_count += point.error_count
+    const key = modelUsageKey(point.model_id, point.model_name, point.model_type)
+    const model = existing.models.get(key) || {
+      model_key: key,
+      model_name: modelNameMap.value.get(key) || point.model_name || '-',
+      total_tokens: 0,
+      calls: 0,
+      error_count: 0,
+    }
+    model.total_tokens += point.total_tokens
+    model.calls += point.calls
+    model.error_count += point.error_count
+    existing.models.set(key, model)
     buckets.set(point.bucket_start, existing)
   }
   return Array.from(buckets.values())
     .sort((a, b) => new Date(a.bucket_start).getTime() - new Date(b.bucket_start).getTime())
     .slice(-24)
+    .map((bucket) => ({
+      bucket_start: bucket.bucket_start,
+      total_tokens: bucket.total_tokens,
+      calls: bucket.calls,
+      error_count: bucket.error_count,
+      segments: Array.from(bucket.models.values())
+        .sort((a, b) => b.total_tokens - a.total_tokens)
+        .map((segment) => ({
+          ...segment,
+          percent: bucket.total_tokens > 0 ? (segment.total_tokens / bucket.total_tokens) * 100 : 0,
+          color: modelColorMap.value.get(segment.model_key) || chartPalette[0],
+        })),
+    }))
 })
 
-const maxBucketTokens = computed(() => Math.max(1, ...bucketRows.value.map((row) => row.total_tokens)))
+const modelLegend = computed<ChartLegendItem[]>(() => {
+  const totals = new Map<string, ChartLegendItem>()
+  for (const point of report.value.timeline) {
+    const key = modelUsageKey(point.model_id, point.model_name, point.model_type)
+    const existing = totals.get(key) || {
+      model_key: key,
+      model_name: modelNameMap.value.get(key) || point.model_name || '-',
+      total_tokens: 0,
+      color: modelColorMap.value.get(key) || chartPalette[0],
+    }
+    existing.total_tokens += point.total_tokens
+    totals.set(key, existing)
+  }
+  return Array.from(totals.values()).sort((a, b) => b.total_tokens - a.total_tokens)
+})
+
+const maxChartTokens = computed(() => Math.max(1, ...chartBuckets.value.map((row) => row.total_tokens)))
 const windowLabel = computed(() => `${formatDate(summary.value.window_start)} - ${formatDate(summary.value.window_end)}`)
 
 function emptyReport(): ModelUsageReport {
@@ -303,6 +435,13 @@ function formatNumber(value?: number | null) {
   return new Intl.NumberFormat(locale.value || 'zh-CN').format(value || 0)
 }
 
+function formatCompactNumber(value?: number | null) {
+  return new Intl.NumberFormat(locale.value || 'zh-CN', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value || 0)
+}
+
 function formatPercent(value?: number | null) {
   return `${(((value ?? 0) || 0) * 100).toFixed(1)}%`
 }
@@ -328,14 +467,40 @@ function formatTime(value: string) {
   }).format(date)
 }
 
+function formatBucketLabel(value: string) {
+  if (range.value === '7d') return formatDate(value)
+  return formatTime(value)
+}
+
 function formatDuration(ms?: number | null) {
   const value = ms || 0
   if (value < 1000) return `${value}ms`
   return `${(value / 1000).toFixed(1)}s`
 }
 
-function bucketWidth(totalTokens: number) {
-  return Math.max(4, Math.round((totalTokens / maxBucketTokens.value) * 100))
+function barHeight(totalTokens: number) {
+  if (totalTokens <= 0) return 0
+  return Math.max(6, Math.round((totalTokens / maxChartTokens.value) * 100))
+}
+
+function modelUsageKey(modelID?: string, modelName?: string, type?: string) {
+  return [modelID || modelName || 'unknown', type || 'unknown'].join(':')
+}
+
+function bucketTooltip(bucket: ChartBucket) {
+  const lines = [
+    `${formatDate(bucket.bucket_start)} · ${formatNumber(bucket.total_tokens)} tokens · ${formatNumber(bucket.calls)} calls`,
+    ...bucket.segments.map(
+      (segment) =>
+        `${segment.model_name}: ${formatNumber(segment.total_tokens)} tokens, ${formatNumber(segment.calls)} calls`,
+    ),
+  ]
+  return lines.join('\n')
+}
+
+function segmentTooltip(bucket: ChartBucket, segment: ChartSegment) {
+  const share = bucket.total_tokens > 0 ? segment.total_tokens / bucket.total_tokens : 0
+  return `${segment.model_name}\n${formatNumber(segment.total_tokens)} tokens · ${formatNumber(segment.calls)} calls · ${formatPercent(share)}`
 }
 
 function modelTypeLabel(type: string) {
@@ -516,42 +681,113 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.timeline-list {
-  display: grid;
-  gap: 8px;
-}
-
-.timeline-row {
-  display: grid;
-  grid-template-columns: 64px minmax(80px, 1fr) 96px;
-  gap: 10px;
-  align-items: center;
-  min-height: 24px;
-}
-
-.timeline-time,
-.timeline-value {
-  color: var(--td-text-color-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.timeline-value {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.timeline-track {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--td-bg-color-component);
+.chart-panel {
   overflow: hidden;
 }
 
-.timeline-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--td-brand-color);
+.usage-chart {
+  display: grid;
+  gap: 14px;
+}
+
+.chart-plot {
+  min-height: 260px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(34px, 1fr));
+  align-items: end;
+  gap: 10px;
+  padding: 12px 4px 4px;
+  border-bottom: 1px solid var(--td-border-level-1-color);
+  overflow-x: auto;
+}
+
+.chart-column {
+  min-width: 34px;
+  height: 232px;
+  display: grid;
+  grid-template-rows: 22px 1fr 32px;
+  align-items: end;
+  justify-items: center;
+  gap: 6px;
+}
+
+.chart-value {
+  max-width: 58px;
+  overflow: hidden;
+  color: var(--td-text-color-placeholder);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-bar {
+  width: 100%;
+  max-width: 34px;
+  min-height: 8px;
+  display: flex;
+  flex-direction: column-reverse;
+  overflow: hidden;
+  border-radius: 6px 6px 2px 2px;
+  background: var(--td-bg-color-component);
+  box-shadow: inset 0 0 0 1px var(--td-border-level-1-color);
+}
+
+.chart-segment {
+  width: 100%;
+  min-height: 2px;
+  transition: opacity 0.15s ease;
+}
+
+.chart-segment:hover {
+  opacity: 0.78;
+}
+
+.chart-time {
+  color: var(--td-text-color-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+  word-break: keep-all;
+}
+
+.chart-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 14px;
+}
+
+.legend-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.legend-name {
+  overflow: hidden;
+  color: var(--td-text-color-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legend-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chart-empty {
+  padding: 24px 0;
 }
 
 .model-cell {
@@ -669,8 +905,17 @@ onUnmounted(() => {
     grid-template-columns: 1fr;
   }
 
-  .timeline-row {
-    grid-template-columns: 54px minmax(64px, 1fr) 78px;
+  .chart-plot {
+    grid-template-columns: repeat(24, minmax(28px, 1fr));
+    gap: 8px;
+  }
+
+  .chart-column {
+    min-width: 28px;
+  }
+
+  .chart-legend {
+    grid-template-columns: 1fr;
   }
 }
 </style>
