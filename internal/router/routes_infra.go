@@ -14,6 +14,7 @@ import (
 func RegisterModelRoutes(
 	r *gin.RouterGroup,
 	handler *handler.ModelHandler,
+	usageHandler *handler.ModelUsageHandler,
 	credHandler *handler.ModelCredentialsHandler,
 	g *rbacGuards,
 ) {
@@ -26,6 +27,10 @@ func RegisterModelRoutes(
 		models.POST("", g.Admin(), handler.CreateModel)
 		// 获取模型列表 — Viewer+
 		models.GET("", g.Viewer(), handler.ListModels)
+		if usageHandler != nil {
+			// Must be declared before /:id so "usage" is not parsed as a model ID.
+			models.GET("/usage", g.Viewer(), usageHandler.GetUsage)
+		}
 		// 调试已保存模型会发起真实上游调用并产生费用 — Admin+
 		models.POST("/:id/debug", g.Admin(), handler.DebugModel)
 		// 获取单个模型 — Viewer+
