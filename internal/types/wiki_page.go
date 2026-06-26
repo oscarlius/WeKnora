@@ -342,6 +342,11 @@ func (g WikiExtractionGranularity) Normalize() WikiExtractionGranularity {
 type WikiConfig struct {
 	// SynthesisModelID is the LLM model ID used for wiki page generation and updates
 	SynthesisModelID string `yaml:"synthesis_model_id" json:"synthesis_model_id"`
+	// SynthesisFallbackModelID is the first fallback LLM model ID kept for compatibility
+	// with older clients that only support a single fallback field.
+	SynthesisFallbackModelID string `yaml:"synthesis_fallback_model_id,omitempty" json:"synthesis_fallback_model_id,omitempty"`
+	// SynthesisFallbackModelIDs are tried in order after the effective synthesis model.
+	SynthesisFallbackModelIDs []string `yaml:"synthesis_fallback_model_ids,omitempty" json:"synthesis_fallback_model_ids,omitempty"`
 	// MaxPagesPerIngest limits pages created/updated per ingest operation (0 = no limit)
 	MaxPagesPerIngest int `yaml:"max_pages_per_ingest" json:"max_pages_per_ingest"`
 	// ExtractionGranularity controls how many candidate slugs Pass 0 extracts
@@ -366,6 +371,80 @@ type WikiConfig struct {
 	// LLM concurrency / HTTP pool considerations as the Map phase,
 	// plus DB connection pool size.
 	IngestReduceParallel int `yaml:"ingest_reduce_parallel" json:"ingest_reduce_parallel,omitempty"`
+}
+
+const MaxWikiSynthesisModelChainLength = 5
+
+// NormalizeSynthesisModelChain trims and de-duplicates configured Wiki
+// synthesis fallback models while keeping the legacy single fallback field in
+// sync with the first configured fallback. Unlike VLM config, an empty primary
+// synthesis model is valid: the runtime then uses the KB summary model as the
+// primary and still honors these fallbacks.
+func (c *WikiConfig) NormalizeSynthesisModelChain() {
+	if c == nil {
+		return
+	}
+	c.SynthesisModelID = strings.TrimSpace(c.SynthesisModelID)
+	c.SynthesisFallbackModelID = strings.TrimSpace(c.SynthesisFallbackModelID)
+
+	source := c.SynthesisFallbackModelIDs
+	if len(source) == 0 && c.SynthesisFallbackModelID != "" {
+		source = []string{c.SynthesisFallbackModelID}
+	}
+
+	seen := make(map[string]bool)
+	if c.SynthesisModelID != "" {
+		seen[c.SynthesisModelID] = true
+	}
+	fallbacks := make([]string, 0, MaxWikiSynthesisModelChainLength-1)
+	for _, raw := range source {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		fallbacks = append(fallbacks, id)
+		if len(fallbacks) >= MaxWikiSynthesisModelChainLength-1 {
+			break
+		}
+	}
+	c.SynthesisFallbackModelIDs = fallbacks
+	if len(fallbacks) > 0 {
+		c.SynthesisFallbackModelID = fallbacks[0]
+	} else {
+		c.SynthesisFallbackModelID = ""
+	}
+}
+
+// SynthesisModelChainIDs returns the ordered Wiki synthesis model chain. The
+// primary model is WikiConfig.SynthesisModelID when set, otherwise the KB
+// summary model; configured fallbacks follow in order.
+func (c WikiConfig) SynthesisModelChainIDs(summaryModelID string) []string {
+	c.NormalizeSynthesisModelChain()
+
+	primary := strings.TrimSpace(c.SynthesisModelID)
+	if primary == "" {
+		primary = strings.TrimSpace(summaryModelID)
+	}
+
+	ids := make([]string, 0, MaxWikiSynthesisModelChainLength)
+	seen := make(map[string]bool)
+	if primary != "" {
+		ids = append(ids, primary)
+		seen[primary] = true
+	}
+	for _, raw := range c.SynthesisFallbackModelIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+		if len(ids) >= MaxWikiSynthesisModelChainLength {
+			break
+		}
+	}
+	return ids
 }
 
 // IngestBatchSizeOrDefault returns IngestBatchSize when set (> 0),
@@ -398,6 +477,7 @@ func (c *WikiConfig) IngestReduceParallelOrDefault(fallback int) int {
 
 // Value implements the driver.Valuer interface
 func (c WikiConfig) Value() (driver.Value, error) {
+	c.NormalizeSynthesisModelChain()
 	return json.Marshal(c)
 }
 
@@ -410,7 +490,11 @@ func (c *WikiConfig) Scan(value interface{}) error {
 	if !ok {
 		return nil
 	}
-	return json.Unmarshal(b, c)
+	if err := json.Unmarshal(b, c); err != nil {
+		return err
+	}
+	c.NormalizeSynthesisModelChain()
+	return nil
 }
 
 // WikiPageListRequest represents a request to list wiki pages with filtering
@@ -436,7 +520,6 @@ type WikiPageListResponse struct {
 	PageSize   int         `json:"page_size"`
 	TotalPages int         `json:"total_pages"`
 }
-
 
 // WikiGraphMode enumerates the graph query modes exposed to the API.
 const (

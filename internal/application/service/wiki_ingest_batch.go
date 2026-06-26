@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,44 @@ func (s *wikiIngestService) scheduleFollowUp(ctx context.Context, payload WikiIn
 		return false
 	}
 	return true
+}
+
+const (
+	spanNameMaxRunes  = 64
+	wikiPageSpanStart = "postprocess.wiki.page["
+)
+
+func wikiPageSpanName(slug string) string {
+	name := fmt.Sprintf("%s%s]", wikiPageSpanStart, slug)
+	if utf8.RuneCountInString(name) <= spanNameMaxRunes {
+		return name
+	}
+
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(slug))
+	suffix := fmt.Sprintf("~%08x", hash.Sum32())
+	maxSlugRunes := spanNameMaxRunes - utf8.RuneCountInString(wikiPageSpanStart) - 1 - utf8.RuneCountInString(suffix)
+	if maxSlugRunes < 0 {
+		maxSlugRunes = 0
+	}
+	return fmt.Sprintf("%s%s%s]", wikiPageSpanStart, truncateRunes(slug, maxSlugRunes), suffix)
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	count := 0
+	for idx := range s {
+		if count == maxRunes {
+			return s[:idx]
+		}
+		count++
+	}
+	return s
 }
 
 func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task) error {
@@ -195,21 +234,13 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		return fmt.Errorf("wiki ingest: KB %s is not wiki type", kb.ID)
 	}
 
-	var synthesisModelID string
-	if kb.WikiConfig != nil {
-		synthesisModelID = kb.WikiConfig.SynthesisModelID
-	}
-	if synthesisModelID == "" {
-		synthesisModelID = kb.SummaryModelID
-	}
-	if synthesisModelID == "" {
-		exitStatus = "missing_synthesis_model"
-		return fmt.Errorf("wiki ingest: no synthesis model configured for KB %s", kb.ID)
-	}
-	chatModel, err := s.modelService.GetChatModel(ctx, synthesisModelID)
+	chatModel, err := s.resolveWikiSynthesisModelChain(ctx, kb)
 	if err != nil {
-		exitStatus = "get_chat_model_failed"
-		return fmt.Errorf("wiki ingest: get chat model: %w", err)
+		exitStatus = "get_synthesis_model_chain_failed"
+		return fmt.Errorf("wiki ingest: get synthesis model chain: %w", err)
+	}
+	if len(chatModel.resolveErrors) > 0 {
+		logger.Warnf(ctx, "wiki ingest: synthesis model chain resolved with skipped models: %s", strings.Join(chatModel.resolveErrors, "; "))
 	}
 
 	// Resolve per-KB tunables once. WikiConfig.IngestBatchSize /
@@ -354,7 +385,9 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 			m := resolveSummaries(ctx, []string{kid})
 			return m[kid]
 		},
-		ExtractionGranularity: granularity,
+		ExtractionGranularity:       granularity,
+		SynthesisModelChainIDs:      chatModel.modelChainTraceIDs(),
+		SynthesisModelResolveErrors: chatModel.resolveErrorTrace(),
 	}
 
 	// 1. MAP PHASE (Parallel extraction and generation of updates)
@@ -786,8 +819,10 @@ func (s *wikiIngestService) mapOneDocument(
 	// nil when the parent attempt is gone (no panic on missing
 	// lookups — span tracker is best-effort).
 	wikiSpan := s.beginWikiSubspan(ctx, knowledgeID, types.JSONMap{
-		"language":          lang,
-		"knowledge_base_id": payload.KnowledgeBaseID,
+		"language":                       lang,
+		"knowledge_base_id":              payload.KnowledgeBaseID,
+		"synthesis_model_chain_ids":      batchCtx.SynthesisModelChainIDs,
+		"synthesis_model_resolve_errors": batchCtx.SynthesisModelResolveErrors,
 	})
 
 	// Guard against the ingest/delete race: if the user deleted the doc while
@@ -1336,7 +1371,7 @@ func (s *wikiIngestService) reduceSlugUpdates(
 			contributors = append(contributors, kid)
 			if pageSpan == nil {
 				if sp, ok := kidToWikiSpan[kid]; ok && sp != nil {
-					pageSpan = s.tracker().BeginSubSpan(ctx, sp, fmt.Sprintf("postprocess.wiki.page[%s]", slug), types.SpanKindSubSpan, types.JSONMap{
+					pageSpan = s.tracker().BeginSubSpan(ctx, sp, wikiPageSpanName(slug), types.SpanKindSubSpan, types.JSONMap{
 						"slug":         slug,
 						"updates":      len(updates),
 						"contributors": contributors,

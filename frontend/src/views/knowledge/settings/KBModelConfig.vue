@@ -66,13 +66,20 @@
           <p class="desc">{{ $t('knowledgeEditor.wiki.synthesisModelTip') }}</p>
         </div>
         <div class="setting-control">
-          <ModelSelector
+          <VLMModelChainSelector
+            :model-ids="config.wikiSynthesisModelIds || [config.wikiSynthesisModelId || '']"
             model-type="KnowledgeQA"
-            :selected-model-id="config.wikiSynthesisModelId"
             :all-models="allModels"
-            @update:selected-model-id="handleWikiModelChange"
+            :primary-required="false"
+            :primary-label="$t('knowledgeEditor.wiki.synthesisPrimaryLabel')"
+            :fallback-label-prefix="$t('knowledgeEditor.wiki.synthesisFallbackLabelPrefix')"
+            :primary-placeholder="$t('knowledgeEditor.wiki.synthesisModelPlaceholder')"
+            :fallback-placeholder="$t('knowledgeEditor.wiki.synthesisFallbackPlaceholder')"
+            :add-fallback-label="$t('knowledgeEditor.wiki.synthesisAddFallback')"
+            :hint="$t('knowledgeEditor.wiki.synthesisModelChainHint', { max: 5 })"
+            :duplicate-warning="$t('knowledgeEditor.wiki.synthesisDuplicateWarning')"
+            @update:model-ids="handleWikiModelChainChange"
             @add-model="handleAddModel('knowledgeqa')"
-            :placeholder="$t('knowledgeEditor.wiki.synthesisModelPlaceholder')"
           />
         </div>
       </div>
@@ -85,6 +92,7 @@
 import { ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import ModelSelector from '@/components/ModelSelector.vue'
+import VLMModelChainSelector from '@/components/VLMModelChainSelector.vue'
 import { useI18n } from 'vue-i18n'
 
 interface ModelConfig {
@@ -92,6 +100,7 @@ interface ModelConfig {
   embeddingModelId?: string
   vllmModelId?: string
   wikiSynthesisModelId?: string
+  wikiSynthesisModelIds?: string[]
 }
 
 interface Props {
@@ -128,15 +137,39 @@ const handleEmbeddingChange = (modelId: string) => {
   })
 }
 
-const handleWikiModelChange = (modelId: string) => {
+const handleWikiModelChainChange = (modelIds: string[]) => {
+  const normalized = normalizeModelChainIdsForEdit(modelIds)
   emit('update:config', {
     ...props.config,
-    wikiSynthesisModelId: modelId
+    wikiSynthesisModelId: normalized[0] || '',
+    wikiSynthesisModelIds: normalized
   })
 }
 
 const handleAddModel = (subSection: string) => {
   uiStore.openSettings('models', subSection)
+}
+
+const normalizeModelChainIdsForEdit = (modelIds: any[]): string[] => {
+  const seen = new Set<string>()
+  const ids: string[] = []
+
+  for (const raw of modelIds || []) {
+    const id = String(raw || '').trim()
+    if (id) {
+      if (seen.has(id)) {
+        ids.push('')
+        continue
+      }
+      seen.add(id)
+      ids.push(id)
+    } else {
+      ids.push('')
+    }
+    if (ids.length >= 5) break
+  }
+
+  return ids.length > 0 ? ids : ['']
 }
 </script>
 
