@@ -287,27 +287,16 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 
 	// 处理多模态模型配置
 	kb.VLMConfig = types.VLMConfig{}
-	if req.VLMConfig != nil && req.Multimodal.Enabled && req.VLMConfig.ModelID != "" {
-		vllmModel, err := h.modelService.GetModelByID(ctx, req.VLMConfig.ModelID)
-		if err != nil || vllmModel == nil {
-			logger.Warn(ctx, "VLM model not found")
-		} else {
-			kb.VLMConfig.Enabled = req.VLMConfig.Enabled
-			kb.VLMConfig.ModelID = req.VLMConfig.ModelID
-			fallbackModelID := strings.TrimSpace(req.VLMConfig.FallbackModelID)
-			if fallbackModelID != "" && fallbackModelID != req.VLMConfig.ModelID {
-				fallbackModel, ferr := h.modelService.GetModelByID(ctx, fallbackModelID)
-				if ferr != nil || fallbackModel == nil {
-					logger.Warn(ctx, "Fallback VLM model not found")
-				} else {
-					kb.VLMConfig.FallbackModelID = fallbackModelID
-				}
-			}
+	if req.VLMConfig != nil && req.Multimodal.Enabled {
+		cfg := *req.VLMConfig
+		cfg.Enabled = req.VLMConfig.Enabled
+		cfg.NormalizeModelChain()
+		if cfg.ModelID != "" {
+			kb.VLMConfig = cfg
 		}
 	}
 	if !kb.VLMConfig.Enabled {
-		kb.VLMConfig.ModelID = ""
-		kb.VLMConfig.FallbackModelID = ""
+		kb.VLMConfig.ClearModelChain()
 	}
 
 	// 处理ASR语音识别配置
@@ -358,8 +347,7 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 	if req.Multimodal.Enabled {
 		// VLM model already set above
 	} else {
-		kb.VLMConfig.ModelID = ""
-		kb.VLMConfig.FallbackModelID = ""
+		kb.VLMConfig.ClearModelChain()
 	}
 
 	// 存储引擎：仅写入 provider 到新字段，参数从租户全局 StorageEngineConfig 读取
@@ -1349,6 +1337,7 @@ func (h *InitializationHandler) GetCurrentConfigByKB(c *gin.Context) {
 		kb.VLMConfig.ModelID,
 		kb.VLMConfig.FallbackModelID,
 	}
+	modelIDs = append(modelIDs, kb.VLMConfig.FallbackModelIDs...)
 
 	for _, modelID := range modelIDs {
 		if modelID != "" {
@@ -1454,6 +1443,13 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 		}
 	} else {
 		config["multimodal"].(map[string]interface{})["enabled"] = hasMultimodal
+	}
+	multimodal := config["multimodal"].(map[string]interface{})
+	multimodal["vlm_config"] = map[string]interface{}{
+		"enabled":            kb.VLMConfig.Enabled,
+		"model_id":           kb.VLMConfig.ModelID,
+		"fallback_model_id":  kb.VLMConfig.FallbackModelID,
+		"fallback_model_ids": kb.VLMConfig.FallbackModelIDs,
 	}
 
 	// 如果没有Rerank模型，设置rerank为disabled

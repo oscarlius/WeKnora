@@ -74,6 +74,59 @@ func TestVLMConfig_UnmarshalMissingFallbackModelID(t *testing.T) {
 	}
 }
 
+func TestVLMConfig_ModelChainIDsLegacyFallback(t *testing.T) {
+	cfg := VLMConfig{
+		Enabled:         true,
+		ModelID:         "vlm-primary",
+		FallbackModelID: "vlm-fallback",
+	}
+	got := cfg.ModelChainIDs()
+	want := []string{"vlm-primary", "vlm-fallback"}
+	if len(got) != len(want) {
+		t.Fatalf("chain length = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chain[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	cfg.NormalizeModelChain()
+	if cfg.FallbackModelID != "vlm-fallback" {
+		t.Fatalf("fallback_model_id = %q, want vlm-fallback", cfg.FallbackModelID)
+	}
+}
+
+func TestVLMConfig_NormalizeModelChainDedupesAndCaps(t *testing.T) {
+	cfg := VLMConfig{
+		Enabled: true,
+		ModelID: " primary ",
+		FallbackModelIDs: []string{
+			" fallback-1 ",
+			"primary",
+			"",
+			"fallback-2",
+			"fallback-1",
+			"fallback-3",
+			"fallback-4",
+			"fallback-5",
+		},
+	}
+	cfg.NormalizeModelChain()
+	want := []string{"primary", "fallback-1", "fallback-2", "fallback-3", "fallback-4"}
+	got := cfg.ModelChainIDs()
+	if len(got) != len(want) {
+		t.Fatalf("chain length = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chain[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if cfg.FallbackModelID != "fallback-1" {
+		t.Fatalf("fallback_model_id = %q, want fallback-1", cfg.FallbackModelID)
+	}
+}
+
 // strPtr returns a pointer to the given string, used to express *string literals in tests.
 func strPtr(s string) *string { return &s }
 

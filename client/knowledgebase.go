@@ -14,24 +14,24 @@ import (
 
 // KnowledgeBase represents a knowledge base
 type KnowledgeBase struct {
-	ID                    string                `json:"id"`
-	Name                  string                `json:"name"` // Name must be unique within the same tenant
-	Type                  string                `json:"type"`
-	IsTemporary           bool                  `json:"is_temporary"`
-	IsPinned              bool                  `json:"is_pinned"`
-	Description           string                `json:"description"`
-	TenantID              uint64                `json:"tenant_id"`
-	ChunkingConfig        ChunkingConfig        `json:"chunking_config"`
-	ImageProcessingConfig ImageProcessingConfig `json:"image_processing_config"`
-	FAQConfig             *FAQConfig            `json:"faq_config"`
-	EmbeddingModelID      string                `json:"embedding_model_id"`
-	SummaryModelID        string                `json:"summary_model_id"`
+	ID                    string                 `json:"id"`
+	Name                  string                 `json:"name"` // Name must be unique within the same tenant
+	Type                  string                 `json:"type"`
+	IsTemporary           bool                   `json:"is_temporary"`
+	IsPinned              bool                   `json:"is_pinned"`
+	Description           string                 `json:"description"`
+	TenantID              uint64                 `json:"tenant_id"`
+	ChunkingConfig        ChunkingConfig         `json:"chunking_config"`
+	ImageProcessingConfig ImageProcessingConfig  `json:"image_processing_config"`
+	FAQConfig             *FAQConfig             `json:"faq_config"`
+	EmbeddingModelID      string                 `json:"embedding_model_id"`
+	SummaryModelID        string                 `json:"summary_model_id"`
 	VLMConfig             VLMConfig              `json:"vlm_config"`
 	StorageProviderConfig *StorageProviderConfig `json:"storage_provider_config"`
 	StorageConfig         StorageConfig          `json:"storage_config"`
 	ExtractConfig         *ExtractConfig         `json:"extract_config"`
-	CreatedAt             time.Time             `json:"created_at"`
-	UpdatedAt             time.Time             `json:"updated_at"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
 	// Computed fields (not stored in database)
 	KnowledgeCount  int64 `json:"knowledge_count"`
 	ChunkCount      int64 `json:"chunk_count"`
@@ -66,9 +66,10 @@ type ImageProcessingConfig struct {
 
 // VLMConfig represents the VLM configuration
 type VLMConfig struct {
-	Enabled         bool   `json:"enabled"`
-	ModelID         string `json:"model_id"`
-	FallbackModelID string `json:"fallback_model_id"`
+	Enabled          bool     `json:"enabled"`
+	ModelID          string   `json:"model_id"`
+	FallbackModelID  string   `json:"fallback_model_id"`
+	FallbackModelIDs []string `json:"fallback_model_ids"`
 }
 
 // StorageProviderConfig stores the KB-level storage provider selection.
@@ -117,8 +118,8 @@ type ParserEngineRule struct {
 
 // QuestionGenerationConfig controls LLM-generated questions per chunk during parsing.
 type QuestionGenerationConfig struct {
-	Enabled         bool `json:"enabled"`
-	QuestionCount   int  `json:"question_count"`
+	Enabled       bool `json:"enabled"`
+	QuestionCount int  `json:"question_count"`
 }
 
 // ASRConfig represents automatic speech recognition settings for audio files.
@@ -350,9 +351,9 @@ func (c *Client) ClearKnowledgeBaseContents(ctx context.Context, knowledgeBaseID
 	}
 
 	var response struct {
-		Success bool                                `json:"success"`
-		Message string                              `json:"message"`
-		Data    ClearKnowledgeBaseContentsResponse   `json:"data"`
+		Success bool                               `json:"success"`
+		Message string                             `json:"message"`
+		Data    ClearKnowledgeBaseContentsResponse `json:"data"`
 	}
 
 	if err := parseResponse(resp, &response); err != nil {

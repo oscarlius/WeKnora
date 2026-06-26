@@ -22,6 +22,7 @@ export interface VLMConfigOverride {
   enabled?: boolean
   model_id?: string
   fallback_model_id?: string
+  fallback_model_ids?: string[]
 }
 
 export interface ASRConfigOverride {

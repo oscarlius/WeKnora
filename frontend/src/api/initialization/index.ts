@@ -89,6 +89,7 @@ export interface KBModelConfigRequest {
         enabled: boolean
         model_id?: string
         fallback_model_id?: string
+        fallback_model_ids?: string[]
     }
     asr_config?: {
         enabled: boolean

@@ -275,34 +275,17 @@
                       <div v-if="formData.multimodalConfig.enabled" class="setting-row"
                         data-guide="kb-create-multimodal-vllm">
                         <div class="setting-info">
-                          <label>{{ $t('knowledgeEditor.advanced.multimodal.vllmLabel') }} <span class="required">*</span></label>
-                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.vllmDescription') }}</p>
+                          <label>VLLM 模型顺序 <span class="required">*</span></label>
+                          <p class="desc">按顺序尝试图片理解模型，前一个失败、超时或返回空白时自动切换下一个。</p>
                         </div>
                         <div class="setting-control">
-                          <ModelSelector
-                            model-type="VLLM"
-                            :selected-model-id="formData.multimodalConfig.vllmModelId"
+                          <VLMModelChainSelector
+                            :model-ids="formData.multimodalConfig.vllmModelIds"
                             :all-models="allModels"
-                            @update:selected-model-id="handleMultimodalVLLMChange"
+                            :primary-placeholder="$t('knowledgeEditor.advanced.multimodal.vllmPlaceholder')"
+                            :fallback-placeholder="$t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
+                            @update:model-ids="handleMultimodalVLLMChainChange"
                             @add-model="handleAddVLLMModel"
-                            :placeholder="$t('knowledgeEditor.advanced.multimodal.vllmPlaceholder')"
-                          />
-                        </div>
-                      </div>
-
-                      <div v-if="formData.multimodalConfig.enabled" class="setting-row">
-                        <div class="setting-info">
-                          <label>{{ $t('knowledgeEditor.advanced.multimodal.fallbackVllmLabel') }}</label>
-                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.fallbackVllmDescription') }}</p>
-                        </div>
-                        <div class="setting-control">
-                          <ModelSelector
-                            model-type="VLLM"
-                            :selected-model-id="formData.multimodalConfig.fallbackVllmModelId"
-                            :all-models="allModels"
-                            @update:selected-model-id="handleMultimodalFallbackVLLMChange"
-                            @add-model="handleAddVLLMModel"
-                            :placeholder="$t('knowledgeEditor.advanced.multimodal.fallbackVllmPlaceholder')"
                           />
                         </div>
                       </div>
@@ -427,6 +410,7 @@ import KBChunkingSettings from './settings/KBChunkingSettings.vue'
 import KBVectorStoreSettings from './settings/KBVectorStoreSettings.vue'
 import KBAdvancedSettings from './settings/KBAdvancedSettings.vue'
 import ModelSelector from '@/components/ModelSelector.vue'
+import VLMModelChainSelector from '@/components/VLMModelChainSelector.vue'
 import GraphSettings from './settings/GraphSettings.vue'
 import KBShareSettings from './settings/KBShareSettings.vue'
 import DataSourceSettings from './settings/DataSourceSettings.vue'
@@ -678,8 +662,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
     storageProvider: '' as string,
     multimodalConfig: {
       enabled: false,
-      vllmModelId: '',
-      fallbackVllmModelId: ''
+      vllmModelIds: [''] as string[]
     },
     asrConfig: {
       enabled: false,
@@ -793,8 +776,7 @@ const loadKBData = async () => {
       storageProvider: (kb.storage_provider_config?.provider || kb.storage_config?.provider || 'local') as string,
       multimodalConfig: {
         enabled: !!kb.vlm_config?.enabled,
-        vllmModelId: kb.vlm_config?.model_id || '',
-        fallbackVllmModelId: kb.vlm_config?.fallback_model_id || ''
+        vllmModelIds: normalizeVLMModelIds(kb.vlm_config)
       },
       asrConfig: {
         enabled: !!kb.asr_config?.enabled,
@@ -948,24 +930,50 @@ const handleParserEngineRulesUpdate = (rules: any[]) => {
 
 const handleMultimodalToggle = () => {
   if (formData.value && !formData.value.multimodalConfig.enabled) {
-    formData.value.multimodalConfig.vllmModelId = ''
-    formData.value.multimodalConfig.fallbackVllmModelId = ''
+    formData.value.multimodalConfig.vllmModelIds = ['']
   }
 }
 
-const handleMultimodalVLLMChange = (modelId: string) => {
-  if (formData.value) {
-    formData.value.multimodalConfig.vllmModelId = modelId
-    if (formData.value.multimodalConfig.fallbackVllmModelId === modelId) {
-      formData.value.multimodalConfig.fallbackVllmModelId = ''
-    }
+const normalizeVLMModelIds = (config?: any): string[] => {
+  const rawIds = [
+    config?.model_id,
+    ...(Array.isArray(config?.fallback_model_ids) ? config.fallback_model_ids : []),
+  ]
+  if (!Array.isArray(config?.fallback_model_ids) && config?.fallback_model_id) {
+    rawIds.push(config.fallback_model_id)
+  }
+  const seen = new Set<string>()
+  const ids = rawIds
+    .map((id: any) => String(id || '').trim())
+    .filter((id: string) => {
+      if (!id || seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    .slice(0, 5)
+  return ids.length > 0 ? ids : ['']
+}
+
+const buildVLMConfigPayload = (enabled: boolean, modelIds: string[]) => {
+  const ids = normalizeVLMModelIds({
+    model_id: modelIds[0] || '',
+    fallback_model_ids: modelIds.slice(1),
+  })
+  const activeIds = enabled ? ids.filter(Boolean).slice(0, 5) : []
+  return {
+    enabled,
+    model_id: activeIds[0] || '',
+    fallback_model_id: activeIds[1] || '',
+    fallback_model_ids: activeIds.slice(1),
   }
 }
 
-const handleMultimodalFallbackVLLMChange = (modelId: string) => {
+const handleMultimodalVLLMChainChange = (modelIds: string[]) => {
   if (formData.value) {
-    formData.value.multimodalConfig.fallbackVllmModelId =
-      modelId === formData.value.multimodalConfig.vllmModelId ? '' : modelId
+    formData.value.multimodalConfig.vllmModelIds = normalizeVLMModelIds({
+      model_id: modelIds[0] || '',
+      fallback_model_ids: modelIds.slice(1),
+    })
   }
 }
 
@@ -1061,7 +1069,7 @@ const validateForm = (): boolean => {
   }
 
   // 验证多模态配置（如果启用）
-  if (formData.value.multimodalConfig.enabled && !formData.value.multimodalConfig.vllmModelId) {
+  if (formData.value.multimodalConfig.enabled && !formData.value.multimodalConfig.vllmModelIds?.[0]) {
     MessagePlugin.warning(t('knowledgeEditor.messages.multimodalInvalid'))
     currentSection.value = 'multimodal'
     return false
@@ -1115,15 +1123,10 @@ const buildSubmitData = () => {
   }
 
   // 添加多模态配置
-  data.vlm_config = {
-    enabled: formData.value.multimodalConfig.enabled,
-    model_id: formData.value.multimodalConfig.enabled
-      ? (formData.value.multimodalConfig.vllmModelId || '')
-      : '',
-    fallback_model_id: formData.value.multimodalConfig.enabled
-      ? (formData.value.multimodalConfig.fallbackVllmModelId || '')
-      : ''
-  }
+  data.vlm_config = buildVLMConfigPayload(
+    formData.value.multimodalConfig.enabled,
+    formData.value.multimodalConfig.vllmModelIds || [''],
+  )
 
   // 添加ASR语音识别配置
   data.asr_config = {
