@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,6 +43,7 @@ type Limiter struct {
 	keyPrefix  string
 	window     time.Duration
 	instanceID string
+	counter    atomic.Uint64
 }
 
 // New constructs a limiter. keyPrefix should include a trailing delimiter
@@ -80,7 +82,7 @@ func (l *Limiter) redisAllow(ctx context.Context, key string, max int) (bool, er
 	redisKey := l.keyPrefix + key
 	nowMs := time.Now().UnixMilli()
 	windowMs := l.window.Milliseconds()
-	member := fmt.Sprintf("%s:%d", l.instanceID, nowMs)
+	member := fmt.Sprintf("%s:%d:%d", l.instanceID, nowMs, l.counter.Add(1))
 
 	result, err := rateLimitScript.Run(ctx, l.redis,
 		[]string{redisKey},

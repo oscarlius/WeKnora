@@ -125,6 +125,7 @@ func NewAsyncqClient() (*asynq.Client, error) {
 // "just got set" window so the retry is highly likely to succeed without
 // burning through retries; but short enough that users don't feel the stall.
 const wikiIngestRetryDelay = 15 * time.Second
+const vlmRateLimitRetryDelay = 10 * time.Second
 
 // asynqRetryDelayFunc customizes per-task retry backoff.
 //
@@ -139,6 +140,9 @@ const wikiIngestRetryDelay = 15 * time.Second
 func asynqRetryDelayFunc(n int, e error, t *asynq.Task) time.Duration {
 	if errors.Is(e, service.ErrWikiIngestConcurrent) {
 		return wikiIngestRetryDelay
+	}
+	if errors.Is(e, service.ErrVLMRateLimited) {
+		return vlmRateLimitRetryDelay
 	}
 	return asynq.DefaultRetryDelayFunc(n, e, t)
 }
