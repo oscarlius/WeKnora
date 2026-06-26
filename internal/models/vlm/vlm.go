@@ -87,6 +87,7 @@ func NewVLM(config *Config, ollamaService *ollama.OllamaService) (VLM, error) {
 	if logger.LLMDebugEnabled() {
 		v = &debugVLM{inner: v}
 	}
+	v = wrapVLMUsage(v, config)
 	return wrapVLMLangfuse(v, nil)
 }
 

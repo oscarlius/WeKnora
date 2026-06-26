@@ -60,6 +60,7 @@ type RouterParams struct {
 	SessionHandler               *session.Handler
 	MessageHandler               *handler.MessageHandler
 	ModelHandler                 *handler.ModelHandler
+	ModelUsageHandler            *handler.ModelUsageHandler
 	ModelCredentialsHandler      *handler.ModelCredentialsHandler
 	EvaluationHandler            *handler.EvaluationHandler
 	AuthHandler                  *handler.AuthHandler
@@ -212,7 +213,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterSessionRoutes(v1, params.SessionHandler, rbacGuards)
 		RegisterChatRoutes(v1, params.SessionHandler, rbacGuards)
 		RegisterMessageRoutes(v1, params.MessageHandler, rbacGuards)
-		RegisterModelRoutes(v1, params.ModelHandler, params.ModelCredentialsHandler, rbacGuards)
+		RegisterModelRoutes(v1, params.ModelHandler, params.ModelUsageHandler, params.ModelCredentialsHandler, rbacGuards)
 		RegisterEvaluationRoutes(v1, params.EvaluationHandler, rbacGuards)
 		RegisterInitializationRoutes(v1, params.InitializationHandler, rbacGuards)
 		RegisterSystemRoutes(v1, params.SystemHandler, rbacGuards)
@@ -623,6 +624,7 @@ func RegisterTenantRoutes(
 func RegisterModelRoutes(
 	r *gin.RouterGroup,
 	handler *handler.ModelHandler,
+	usageHandler *handler.ModelUsageHandler,
 	credHandler *handler.ModelCredentialsHandler,
 	g *rbacGuards,
 ) {
@@ -631,6 +633,9 @@ func RegisterModelRoutes(
 	{
 		// 获取模型厂商列表 — Viewer+
 		models.GET("/providers", g.Viewer(), handler.ListModelProviders)
+		// 获取模型消耗统计 — Viewer+. Keep before /:id so Gin does not treat
+		// "usage" as a model id.
+		models.GET("/usage", g.Viewer(), usageHandler.GetUsage)
 		// 创建模型 — Admin+
 		models.POST("", g.Admin(), handler.CreateModel)
 		// 获取模型列表 — Viewer+

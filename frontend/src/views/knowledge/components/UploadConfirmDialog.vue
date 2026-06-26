@@ -146,10 +146,10 @@
                       <div v-if="uiState.multimodalConfig.enabled" class="setting-row setting-row--field">
                         <div class="setting-info">
                           <label>
-                            VLLM 模型顺序
+                            {{ t('knowledgeEditor.vlmChain.orderLabel') }}
                             <span class="required">*</span>
                           </label>
-                          <p class="desc">按顺序尝试图片理解模型，前一个失败、超时或返回空白时自动切换下一个。</p>
+                          <p class="desc">{{ t('knowledgeEditor.vlmChain.orderDescription') }}</p>
                         </div>
                         <div class="setting-control setting-control--full">
                           <VLMModelChainSelector
@@ -355,7 +355,9 @@ function getModelName(modelId: string): string {
   return model?.name || modelId
 }
 
-function normalizeVLMModelIds(config?: any): string[] {
+const MAX_VLM_MODELS = 5
+
+function getVLMConfigModelIds(config?: any): string[] {
   const rawIds = [
     config?.model_id,
     ...(Array.isArray(config?.fallback_model_ids) ? config.fallback_model_ids : []),
@@ -363,24 +365,41 @@ function normalizeVLMModelIds(config?: any): string[] {
   if (!Array.isArray(config?.fallback_model_ids) && config?.fallback_model_id) {
     rawIds.push(config.fallback_model_id)
   }
+  return rawIds
+}
+
+function normalizeVLMModelIdsForEdit(modelIds: any[], preserveEmpty = true): string[] {
   const seen = new Set<string>()
-  const ids = rawIds
-    .map((id: any) => String(id || '').trim())
-    .filter((id: string) => {
-      if (!id || seen.has(id)) return false
+  const ids: string[] = []
+
+  for (const raw of modelIds || []) {
+    const id = String(raw || '').trim()
+    if (id) {
+      if (seen.has(id)) {
+        if (preserveEmpty) ids.push('')
+        continue
+      }
       seen.add(id)
-      return true
-    })
-    .slice(0, 5)
+      ids.push(id)
+    } else if (preserveEmpty) {
+      ids.push('')
+    }
+    if (ids.length >= MAX_VLM_MODELS) break
+  }
+
   return ids.length > 0 ? ids : ['']
 }
 
+function normalizeVLMConfigForEdit(config?: any): string[] {
+  return normalizeVLMModelIdsForEdit(getVLMConfigModelIds(config), false)
+}
+
+function normalizeVLMModelIdsForPayload(modelIds: string[]): string[] {
+  return normalizeVLMModelIdsForEdit(modelIds, false).filter(Boolean).slice(0, MAX_VLM_MODELS)
+}
+
 function buildVLMConfigPayload(enabled: boolean, modelIds: string[]) {
-  const ids = normalizeVLMModelIds({
-    model_id: modelIds[0] || '',
-    fallback_model_ids: modelIds.slice(1),
-  })
-  const activeIds = enabled ? ids.filter(Boolean).slice(0, 5) : []
+  const activeIds = enabled ? normalizeVLMModelIdsForPayload(modelIds) : []
   return {
     enabled,
     model_id: activeIds[0] || '',
@@ -390,10 +409,7 @@ function buildVLMConfigPayload(enabled: boolean, modelIds: string[]) {
 }
 
 function formatVLMModelChain(modelIds: string[]): string {
-  const activeIds = normalizeVLMModelIds({
-    model_id: modelIds[0] || '',
-    fallback_model_ids: modelIds.slice(1),
-  }).filter(Boolean)
+  const activeIds = normalizeVLMModelIdsForPayload(modelIds)
   if (!activeIds.length) return t('uploadConfirm.notSet')
   return activeIds.map((id, index) => `${index + 1}. ${getModelName(id)}`).join(' -> ')
 }
@@ -693,7 +709,7 @@ function initFromKbInfo(kb: any) {
     },
     multimodalConfig: {
       enabled: !!kb.vlm_config?.enabled,
-      vllmModelIds: normalizeVLMModelIds(kb.vlm_config),
+      vllmModelIds: normalizeVLMConfigForEdit(kb.vlm_config),
     },
     asrConfig: {
       enabled: !!kb.asr_config?.enabled,
@@ -777,7 +793,7 @@ function applyOverridesToState(o?: KnowledgeProcessOverrides | null) {
   if (o.enable_multimodel != null) s.multimodalConfig.enabled = o.enable_multimodel
   if (o.vlm_config) {
     if (o.vlm_config.enabled != null) s.multimodalConfig.enabled = o.vlm_config.enabled
-    s.multimodalConfig.vllmModelIds = normalizeVLMModelIds(o.vlm_config)
+    s.multimodalConfig.vllmModelIds = normalizeVLMConfigForEdit(o.vlm_config)
   }
   if (o.asr_config) {
     if (o.asr_config.enabled != null) s.asrConfig.enabled = o.asr_config.enabled
@@ -873,10 +889,7 @@ const handleChunkingConfigUpdate = (config: ChunkingUIConfig) => {
 }
 
 const handleMultimodalVLLMChainChange = (modelIds: string[]) => {
-  uiState.value.multimodalConfig.vllmModelIds = normalizeVLMModelIds({
-    model_id: modelIds[0] || '',
-    fallback_model_ids: modelIds.slice(1),
-  })
+  uiState.value.multimodalConfig.vllmModelIds = normalizeVLMModelIdsForEdit(modelIds, true)
 }
 
 const handleAddVLLMModel = () => {

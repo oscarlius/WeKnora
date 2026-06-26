@@ -69,7 +69,7 @@
             <!-- 右侧内容区域 -->
             <div class="settings-content">
               <div class="content-wrapper" :class="{
-                'content-wrapper--wide': currentSection === 'members',
+                'content-wrapper--wide': currentSection === 'members' || currentSection === 'modelUsage',
                 'content-wrapper--full': currentSection === 'system-global',
               }">
                 <!-- 角色不允许访问当前 section（deep-link 进来 / 跨租户切换后角色降级）—— 优先于具体 section 渲染。
@@ -101,6 +101,10 @@
                   <!-- 模型配置 -->
                   <div v-if="currentSection === 'models'" class="section">
                     <ModelSettings />
+                  </div>
+
+                  <div v-if="currentSection === 'modelUsage'" class="section">
+                    <ModelUsageSettings />
                   </div>
 
                   <!-- 网络搜索配置 -->
@@ -186,6 +190,7 @@ import ApiInfo from './ApiInfo.vue'
 import UserProfile from './UserProfile.vue'
 import GeneralSettings from './GeneralSettings.vue'
 import ModelSettings from './ModelSettings.vue'
+import ModelUsageSettings from './ModelUsageSettings.vue'
 import OllamaSettings from './OllamaSettings.vue'
 import McpSettings from './McpSettings.vue'
 import WebSearchSettings from './WebSearchSettings.vue'
@@ -240,6 +245,7 @@ const SECTION_MIN_ROLE: Record<string, RoleKey> = {
   ollama: 'admin',
   weknoracloud: 'admin',
   models: 'viewer',
+  modelUsage: 'viewer',
   websearch: 'admin',
   chathistory: 'admin',
   vectorstore: 'admin',

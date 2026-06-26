@@ -147,6 +147,7 @@ func NewChat(config *ChatConfig, ollamaService *ollama.OllamaService) (Chat, err
 		return nil, fmt.Errorf("unsupported chat model source: %s", config.Source)
 	}
 	c, err = wrapChatDebug(c, err)
+	c, err = wrapChatUsage(c, err, config)
 	return wrapChatLangfuse(c, err)
 }
 

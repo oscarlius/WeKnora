@@ -2,3 +2,5 @@
 !dist
 !nginx.conf
 !docker-entrypoint.sh
+!Dockerfile.nodeproxy
+!server.js

@@ -7,7 +7,7 @@
     >
       <div class="vlm-chain-row__label">
         <span class="vlm-chain-row__badge">{{ index + 1 }}</span>
-        <span>{{ index === 0 ? primaryLabel : fallbackLabel(index) }}</span>
+        <span>{{ index === 0 ? resolvedPrimaryLabel : fallbackLabel(index) }}</span>
         <span v-if="index === 0" class="required">*</span>
       </div>
       <div class="vlm-chain-row__selector">
@@ -16,7 +16,7 @@
           :selected-model-id="modelId"
           :all-models="allModels"
           :status="index === 0 ? status : 'default'"
-          :placeholder="index === 0 ? primaryPlaceholder : fallbackPlaceholder"
+          :placeholder="index === 0 ? resolvedPrimaryPlaceholder : resolvedFallbackPlaceholder"
           @update:selected-model-id="(value: string) => updateModel(index, value)"
           @add-model="handleAddModel"
         />
@@ -28,7 +28,7 @@
           :disabled="index === 0"
           @click="moveModel(index, -1)"
         >
-          上移
+          {{ t('knowledgeEditor.vlmChain.up') }}
         </t-button>
         <t-button
           size="small"
@@ -36,7 +36,7 @@
           :disabled="index === localModelIds.length - 1"
           @click="moveModel(index, 1)"
         >
-          下移
+          {{ t('knowledgeEditor.vlmChain.down') }}
         </t-button>
         <t-button
           v-if="index > 0"
@@ -45,7 +45,7 @@
           theme="danger"
           @click="removeModel(index)"
         >
-          删除
+          {{ t('knowledgeEditor.vlmChain.remove') }}
         </t-button>
       </div>
     </div>
@@ -57,10 +57,10 @@
         :disabled="localModelIds.length >= maxModels"
         @click="addFallback"
       >
-        添加备用模型
+        {{ t('knowledgeEditor.vlmChain.addFallback') }}
       </t-button>
       <span class="vlm-chain-footer__hint">
-        按顺序尝试，最多 {{ maxModels }} 个；报错、超时或空白响应会自动切到下一个。
+        {{ t('knowledgeEditor.vlmChain.hint', { max: maxModels }) }}
       </span>
     </div>
   </div>
@@ -68,6 +68,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import ModelSelector from '@/components/ModelSelector.vue'
 
@@ -85,11 +86,13 @@ const props = withDefaults(defineProps<{
   allModels: () => [],
   maxModels: 5,
   status: 'default',
-  primaryLabel: '主 VLLM 模型',
-  fallbackLabelPrefix: '备用模型',
-  primaryPlaceholder: '选择主 VLLM 模型',
-  fallbackPlaceholder: '选择备用 VLLM 模型',
+  primaryLabel: '',
+  fallbackLabelPrefix: '',
+  primaryPlaceholder: '',
+  fallbackPlaceholder: '',
 })
+
+const { t } = useI18n()
 
 const emit = defineEmits<{
   'update:modelIds': [value: string[]]
@@ -103,20 +106,31 @@ const localModelIds = computed(() => {
   return ids.slice(0, props.maxModels)
 })
 
+const resolvedPrimaryLabel = computed(() => props.primaryLabel || t('knowledgeEditor.vlmChain.primaryLabel'))
+const resolvedFallbackLabelPrefix = computed(() => props.fallbackLabelPrefix || t('knowledgeEditor.vlmChain.fallbackLabelPrefix'))
+const resolvedPrimaryPlaceholder = computed(() => props.primaryPlaceholder || t('knowledgeEditor.vlmChain.primaryPlaceholder'))
+const resolvedFallbackPlaceholder = computed(() => props.fallbackPlaceholder || t('knowledgeEditor.vlmChain.fallbackPlaceholder'))
+
 function fallbackLabel(index: number) {
-  return `${props.fallbackLabelPrefix} ${index}`
+  return `${resolvedFallbackLabelPrefix.value} ${index}`
 }
 
 function normalize(ids: string[]) {
   const result: string[] = []
   const seen = new Set<string>()
+
   for (const raw of ids) {
     const id = (raw || '').trim()
-    if (id && seen.has(id)) continue
-    if (id) seen.add(id)
-    result.push(id)
+    if (id) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      result.push(id)
+    } else {
+      result.push('')
+    }
     if (result.length >= props.maxModels) break
   }
+
   return result.length > 0 ? result : ['']
 }
 
@@ -124,7 +138,7 @@ function updateModel(index: number, value: string) {
   const next = [...localModelIds.value]
   const trimmed = (value || '').trim()
   if (trimmed && next.some((id, i) => i !== index && id === trimmed)) {
-    MessagePlugin.warning('该 VLLM 模型已在顺序列表中。')
+    MessagePlugin.warning(t('knowledgeEditor.vlmChain.duplicateWarning'))
     return
   }
   next[index] = trimmed

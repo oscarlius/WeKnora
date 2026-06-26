@@ -275,8 +275,8 @@
                       <div v-if="formData.multimodalConfig.enabled" class="setting-row"
                         data-guide="kb-create-multimodal-vllm">
                         <div class="setting-info">
-                          <label>VLLM 模型顺序 <span class="required">*</span></label>
-                          <p class="desc">按顺序尝试图片理解模型，前一个失败、超时或返回空白时自动切换下一个。</p>
+                          <label>{{ $t('knowledgeEditor.vlmChain.orderLabel') }} <span class="required">*</span></label>
+                          <p class="desc">{{ $t('knowledgeEditor.vlmChain.orderDescription') }}</p>
                         </div>
                         <div class="setting-control">
                           <VLMModelChainSelector
@@ -776,7 +776,7 @@ const loadKBData = async () => {
       storageProvider: (kb.storage_provider_config?.provider || kb.storage_config?.provider || 'local') as string,
       multimodalConfig: {
         enabled: !!kb.vlm_config?.enabled,
-        vllmModelIds: normalizeVLMModelIds(kb.vlm_config)
+        vllmModelIds: normalizeVLMConfigForEdit(kb.vlm_config)
       },
       asrConfig: {
         enabled: !!kb.asr_config?.enabled,
@@ -934,7 +934,9 @@ const handleMultimodalToggle = () => {
   }
 }
 
-const normalizeVLMModelIds = (config?: any): string[] => {
+const MAX_VLM_MODELS = 5
+
+const getVLMConfigModelIds = (config?: any): string[] => {
   const rawIds = [
     config?.model_id,
     ...(Array.isArray(config?.fallback_model_ids) ? config.fallback_model_ids : []),
@@ -942,24 +944,41 @@ const normalizeVLMModelIds = (config?: any): string[] => {
   if (!Array.isArray(config?.fallback_model_ids) && config?.fallback_model_id) {
     rawIds.push(config.fallback_model_id)
   }
+  return rawIds
+}
+
+const normalizeVLMModelIdsForEdit = (modelIds: any[], preserveEmpty = true): string[] => {
   const seen = new Set<string>()
-  const ids = rawIds
-    .map((id: any) => String(id || '').trim())
-    .filter((id: string) => {
-      if (!id || seen.has(id)) return false
+  const ids: string[] = []
+
+  for (const raw of modelIds || []) {
+    const id = String(raw || '').trim()
+    if (id) {
+      if (seen.has(id)) {
+        if (preserveEmpty) ids.push('')
+        continue
+      }
       seen.add(id)
-      return true
-    })
-    .slice(0, 5)
+      ids.push(id)
+    } else if (preserveEmpty) {
+      ids.push('')
+    }
+    if (ids.length >= MAX_VLM_MODELS) break
+  }
+
   return ids.length > 0 ? ids : ['']
 }
 
+const normalizeVLMConfigForEdit = (config?: any): string[] => {
+  return normalizeVLMModelIdsForEdit(getVLMConfigModelIds(config), false)
+}
+
+const normalizeVLMModelIdsForPayload = (modelIds: string[]): string[] => {
+  return normalizeVLMModelIdsForEdit(modelIds, false).filter(Boolean).slice(0, MAX_VLM_MODELS)
+}
+
 const buildVLMConfigPayload = (enabled: boolean, modelIds: string[]) => {
-  const ids = normalizeVLMModelIds({
-    model_id: modelIds[0] || '',
-    fallback_model_ids: modelIds.slice(1),
-  })
-  const activeIds = enabled ? ids.filter(Boolean).slice(0, 5) : []
+  const activeIds = enabled ? normalizeVLMModelIdsForPayload(modelIds) : []
   return {
     enabled,
     model_id: activeIds[0] || '',
@@ -970,10 +989,7 @@ const buildVLMConfigPayload = (enabled: boolean, modelIds: string[]) => {
 
 const handleMultimodalVLLMChainChange = (modelIds: string[]) => {
   if (formData.value) {
-    formData.value.multimodalConfig.vllmModelIds = normalizeVLMModelIds({
-      model_id: modelIds[0] || '',
-      fallback_model_ids: modelIds.slice(1),
-    })
+    formData.value.multimodalConfig.vllmModelIds = normalizeVLMModelIdsForEdit(modelIds, true)
   }
 }
 
