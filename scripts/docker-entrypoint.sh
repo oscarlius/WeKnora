@@ -11,7 +11,6 @@ set -e
 # Directories that may be bind-mounted and need appuser access
 MOUNT_DIRS=(
     /app/skills/preloaded
-    /data/files
 )
 
 for dir in "${MOUNT_DIRS[@]}"; do
@@ -19,6 +18,13 @@ for dir in "${MOUNT_DIRS[@]}"; do
         chown -R appuser:appuser "$dir" 2>/dev/null || true
     fi
 done
+
+# /data/files can contain a large production corpus. Recursively chowning it on
+# every container start can block readiness for minutes or hours, so only ensure
+# the mount root itself is writable by appuser.
+if [ -d /data/files ]; then
+    chown appuser:appuser /data/files 2>/dev/null || true
+fi
 
 # ─── Merge built-in skills into preloaded ───
 # Built-in skills are backed up at /app/skills/_builtin during image build.

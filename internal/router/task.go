@@ -66,27 +66,6 @@ func readRedisOpTimeoutMs() int {
 	return defaultRedisOpTimeoutMs
 }
 
-func readAsynqQueueWeight(envName string, fallback int) int {
-	if v := strings.TrimSpace(os.Getenv(envName)); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			return parsed
-		}
-	}
-	return fallback
-}
-
-func asynqQueueWeights() map[string]int {
-	return map[string]int{
-		types.QueueCritical: readAsynqQueueWeight("WEKNORA_ASYNQ_QUEUE_CRITICAL_WEIGHT", 6),
-		types.QueueDefault:  readAsynqQueueWeight("WEKNORA_ASYNQ_QUEUE_DEFAULT_WEIGHT", 3),
-		types.QueueLow:      readAsynqQueueWeight("WEKNORA_ASYNQ_QUEUE_LOW_WEIGHT", 1),
-		// Isolated lane for high-volume slow VLM image tasks.
-		types.QueueMultimodal: readAsynqQueueWeight("WEKNORA_ASYNQ_QUEUE_MULTIMODAL_WEIGHT", 1),
-		types.QueueGraph:      readAsynqQueueWeight("WEKNORA_ASYNQ_QUEUE_GRAPH_WEIGHT", 1),
-		types.QueueQuestion:   readAsynqQueueWeight("WEKNORA_ASYNQ_QUEUE_QUESTION_WEIGHT", 1),
-	}
-}
-
 func getAsynqRedisClientOpt() *asynq.RedisClientOpt {
 	db := 0
 	if dbStr := os.Getenv("REDIS_DB"); dbStr != "" {

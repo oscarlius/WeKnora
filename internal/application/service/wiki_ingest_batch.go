@@ -103,12 +103,10 @@ func (s *wikiIngestService) newWikiBatchContext(
 			for _, slug := range need {
 				if p, ok := pages[slug]; ok && p != nil {
 					if p.Status == types.WikiPageStatusArchived ||
-						p.PageType == types.WikiPageTypeIndex ||
-						p.PageType == types.WikiPageTypeLog {
+						p.PageType == types.WikiPageTypeIndex {
 						// Treat archived / system pages as missing from the
 						// title-resolution map: cleanDeadLinks shouldn't link
-						// to them, and the log-feed slug-title fallback should
-						// degrade to slug-only display.
+						// to them or surface them as cross-link candidates.
 						slugTitleCache[slug] = ""
 						continue
 					}
@@ -211,10 +209,10 @@ func wikiPageSpanName(slug string) string {
 	if maxSlugRunes < 0 {
 		maxSlugRunes = 0
 	}
-	return fmt.Sprintf("%s%s%s]", wikiPageSpanStart, truncateRunes(slug, maxSlugRunes), suffix)
+	return fmt.Sprintf("%s%s%s]", wikiPageSpanStart, truncateWikiRunes(slug, maxSlugRunes), suffix)
 }
 
-func truncateRunes(s string, maxRunes int) string {
+func truncateWikiRunes(s string, maxRunes int) string {
 	if maxRunes <= 0 {
 		return ""
 	}
