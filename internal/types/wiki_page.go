@@ -371,6 +371,32 @@ type WikiConfig struct {
 	// LLM concurrency / HTTP pool considerations as the Map phase,
 	// plus DB connection pool size.
 	IngestReduceParallel int `yaml:"ingest_reduce_parallel" json:"ingest_reduce_parallel,omitempty"`
+
+	// MaxPageContentBytes caps how large a single wiki page's markdown body
+	// may grow before ingest stops re-synthesizing it. 0 (default) disables
+	// the cap — existing behaviour, pages grow unbounded.
+	//
+	// Highly-referenced "hub" entity/concept pages (e.g. a broker cited by
+	// every research report) otherwise accumulate hundreds of KB of content
+	// and get re-synthesized on every ingest that touches them. Each such
+	// rewrite re-tokenizes the whole body into the wiki_pages fulltext GIN
+	// index, turning a single-row UPDATE into a multi-minute statement and
+	// the dominant ingest write-amplification cost. When a page is already
+	// at/over this cap and the current batch only ADDS information (no
+	// retractions), ingest skips the LLM re-synthesis and persists only the
+	// bookkeeping columns (source/chunk refs) via the content-preserving
+	// path — so the fulltext GIN is never touched. Retractions still
+	// regenerate the page (they shrink it). New information for a capped hub
+	// page remains fully retrievable from its own source documents; it just
+	// stops being woven into the oversized hub page.
+	MaxPageContentBytes int `yaml:"max_page_content_bytes" json:"max_page_content_bytes,omitempty"`
+
+	// MaxRefs caps the length of a page's chunk_refs array (most-recent kept).
+	// 0 (default) disables the cap. Bounds per-row JSONB / TOAST write size on
+	// hub pages whose chunk citations grow into the thousands. The page body's
+	// inline [cNNN] citations are unaffected; this only trims the provenance
+	// index used for evidence surfacing and delete reconciliation.
+	MaxRefs int `yaml:"max_refs" json:"max_refs,omitempty"`
 }
 
 const MaxWikiSynthesisModelChainLength = 5

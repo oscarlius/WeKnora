@@ -24,13 +24,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrWikiIngestConcurrent is returned by the wiki ingest handler when another
-// batch is already running for the same KB (i.e. the `wiki:active:<kbID>`
-// Redis lock is held). The asynq server's RetryDelayFunc uses errors.Is on
-// this sentinel to apply a short, fixed retry delay instead of asynq's default
-// exponential backoff — otherwise a freshly orphaned lock (e.g. from a crash
-// or restart) would force newcomers to wait minutes even after the lock
-// naturally expires.
+// ErrWikiIngestConcurrent is retained for retry-delay compatibility with
+// older wiki ingest retry paths. Current active-lock conflicts schedule a
+// follow-up trigger and return nil so they do not burn the asynq retry budget.
 var ErrWikiIngestConcurrent = errors.New("concurrent wiki task active")
 
 const (
@@ -44,6 +40,10 @@ const (
 	// wikiIngestDelay is how long to wait after a document is added before
 	// the batch task fires. Debounces rapid uploads.
 	wikiIngestDelay = 30 * time.Second
+
+	// wikiFollowUpDelay is the short delay used after a batch leaves rows in
+	// task_pending_ops, or when a trigger observes the per-KB active lock.
+	wikiFollowUpDelay = 5 * time.Second
 
 	// wikiMaxDocsPerBatch limits how many documents a single batch processes.
 	// Prevents unbounded execution time. Remaining ops stay in
@@ -116,6 +116,17 @@ const (
 // without duplicating the format string.
 func WikiDeletedTombstoneKey(kbID, knowledgeID string) string {
 	return wikiDeletedKeyPrefix + kbID + ":" + knowledgeID
+}
+
+func wikiIngestTriggerTaskID(tenantID uint64, kbID, language string, window time.Duration, now time.Time) string {
+	if window <= 0 {
+		window = time.Second
+	}
+	if language == "" {
+		language = "default"
+	}
+	bucket := now.UTC().UnixNano() / int64(window)
+	return fmt.Sprintf("wiki:ingest:%d:%s:%s:%d", tenantID, kbID, language, bucket)
 }
 
 // WikiIngestPayload is the asynq task payload for wiki ingest batch trigger.
@@ -287,9 +298,10 @@ func (s *wikiIngestService) beginWikiSubspan(ctx context.Context, knowledgeID st
 // dedup_key=knowledgeID), then schedules a debounced asynq trigger task.
 // When the trigger fires, the worker peeks a batch from
 // task_pending_ops, processes it, deletes consumed rows, and (if more
-// remain) schedules a follow-up. Multiple debounced triggers within the
-// 30s window all coalesce: the first one to acquire the per-KB active
-// lock drains the batch; subsequent ones see an empty queue and exit.
+// remain) schedules a follow-up. Multiple trigger attempts within the
+// debounce window coalesce through a deterministic asynq TaskID. The first
+// runnable task to acquire the per-KB active lock drains the batch; later
+// lock conflicts schedule a lightweight follow-up instead of retrying.
 //
 // Lite mode (no Redis) still works as long as Postgres is reachable —
 // the queue lives in PG, only the active-batch lock is Redis-only and
@@ -344,11 +356,16 @@ func EnqueueWikiIngest(
 
 	t := asynq.NewTask(types.TypeWikiIngest, triggerBytes,
 		asynq.Queue("low"),
+		asynq.TaskID(wikiIngestTriggerTaskID(tenantID, kbID, lang, wikiIngestDelay, time.Now())),
 		asynq.MaxRetry(wikiIngestMaxRetry),
 		asynq.Timeout(60*time.Minute),
 		asynq.ProcessIn(wikiIngestDelay),
 	)
 	if _, err := task.Enqueue(t); err != nil {
+		if errors.Is(err, asynq.ErrTaskIDConflict) {
+			logger.Infof(ctx, "wiki ingest: trigger already enqueued for KB %s", kbID)
+			return
+		}
 		logger.Warnf(ctx, "wiki ingest: failed to enqueue trigger task: %v", err)
 	}
 }
@@ -402,18 +419,23 @@ func EnqueueWikiRetract(
 	triggerBytes, _ := json.Marshal(trigger)
 	t := asynq.NewTask(types.TypeWikiIngest, triggerBytes,
 		asynq.Queue("low"),
+		asynq.TaskID(wikiIngestTriggerTaskID(payload.TenantID, payload.KnowledgeBaseID, payload.Language, wikiFollowUpDelay, time.Now())),
 		asynq.MaxRetry(wikiIngestMaxRetry),
 		asynq.Timeout(60*time.Minute),
-		asynq.ProcessIn(5*time.Second), // Retract can trigger the batch quickly
+		asynq.ProcessIn(wikiFollowUpDelay), // Retract can trigger the batch quickly
 	)
 	if _, err := task.Enqueue(t); err != nil {
+		if errors.Is(err, asynq.ErrTaskIDConflict) {
+			logger.Infof(ctx, "wiki retract: trigger already enqueued for KB %s", payload.KnowledgeBaseID)
+			return
+		}
 		logger.Warnf(ctx, "wiki retract: failed to enqueue trigger task: %v", err)
 	}
 }
 
 // Handle implements interfaces.TaskHandler for asynq task processing.
-// Wiki ingest tasks are debounced via asynq.Unique + ProcessIn, so at most
-// one ingest task runs per KB at a time. No distributed lock needed.
+// Wiki ingest triggers are debounced via deterministic TaskID + ProcessIn,
+// while the per-KB active lock ensures only one batch runs at a time.
 func (s *wikiIngestService) Handle(ctx context.Context, t *asynq.Task) error {
 	return s.ProcessWikiIngest(ctx, t)
 }
@@ -676,6 +698,16 @@ type WikiBatchContext struct {
 	// pre-resolved ids and never races on folder creation. Read-only during
 	// reduce.
 	PlannedFolderID map[string]string
+
+	// MaxPageContentBytes mirrors KB.WikiConfig.MaxPageContentBytes, resolved
+	// once per batch. 0 = no cap (unbounded page growth). When > 0, reduce
+	// skips re-synthesizing a page whose existing content already meets/exceeds
+	// it on add-only updates (see WikiConfig.MaxPageContentBytes).
+	MaxPageContentBytes int
+
+	// MaxRefs mirrors KB.WikiConfig.MaxRefs, resolved once per batch. 0 = no
+	// cap. When > 0, reduce trims chunk_refs to the most-recent MaxRefs entries.
+	MaxRefs int
 }
 
 // SlugUpdate represents a single update operation for a specific slug

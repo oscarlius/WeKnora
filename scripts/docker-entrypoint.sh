@@ -11,7 +11,6 @@ set -e
 # Directories that may be bind-mounted and need appuser access
 MOUNT_DIRS=(
     /app/skills/preloaded
-    /data/files
 )
 
 for dir in "${MOUNT_DIRS[@]}"; do
@@ -19,6 +18,14 @@ for dir in "${MOUNT_DIRS[@]}"; do
         chown -R appuser:appuser "$dir" 2>/dev/null || true
     fi
 done
+
+if [ -d /data/files ]; then
+    if [ "${WEKNORA_FIX_DATA_FILES_OWNERSHIP_RECURSIVE:-false}" = "true" ]; then
+        chown -R appuser:appuser /data/files 2>/dev/null || true
+    else
+        chown appuser:appuser /data/files 2>/dev/null || true
+    fi
+fi
 
 # ─── Merge built-in skills into preloaded ───
 # Built-in skills are backed up at /app/skills/_builtin during image build.

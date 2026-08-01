@@ -955,6 +955,9 @@ func (s *knowledgeService) ProcessSummaryGeneration(ctx context.Context, t *asyn
 	if kb.SummaryModelID == "" {
 		logger.Warn(ctx, "Knowledge base summary model ID is empty, skipping summary generation")
 		summaryOut["skipped"] = "no_summary_model"
+		if err := s.repo.UpdateKnowledgeColumn(ctx, payload.KnowledgeID, "summary_status", types.SummaryStatusNone); err != nil {
+			logger.Warnf(ctx, "Failed to reset summary status for skipped summary generation: %v", err)
+		}
 		return nil
 	}
 
@@ -2751,6 +2754,7 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		return nil
 	}
 	knowledge.ParseStatus = "processing"
+	knowledge.ErrorMessage = ""
 	knowledge.UpdatedAt = time.Now()
 	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
 		logger.Errorf(ctx, "failed to update knowledge status to processing: %v", err)
@@ -3420,7 +3424,7 @@ func (s *knowledgeService) enqueueKnowledgePostProcessTask(ctx context.Context, 
 		return
 	}
 
-	task := asynq.NewTask(types.TypeKnowledgePostProcess, payloadBytes, asynq.Queue(types.QueueDefault), asynq.MaxRetry(3))
+	task := asynq.NewTask(types.TypeKnowledgePostProcess, payloadBytes, asynq.Queue(types.QueueCritical), asynq.MaxRetry(3))
 	if _, err := s.task.Enqueue(task); err != nil {
 		logger.Errorf(ctx, "Failed to enqueue knowledge post process task: %v", err)
 	} else {

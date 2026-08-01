@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/models/chat"
@@ -52,6 +53,25 @@ func TestWikiPageSpanName(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "postprocess.wiki.page[entity/") || !strings.Contains(got, "~") || !strings.HasSuffix(got, "]") {
 		t.Fatalf("span name does not preserve prefix/hash/suffix: %q", got)
+	}
+}
+
+func TestWikiIngestTriggerTaskIDBucketsByWindow(t *testing.T) {
+	base := time.Unix(90, 0)
+	first := wikiIngestTriggerTaskID(10000, "kb-1", "zh-CN", 30*time.Second, base)
+	sameBucket := wikiIngestTriggerTaskID(10000, "kb-1", "zh-CN", 30*time.Second, base.Add(29*time.Second))
+	nextBucket := wikiIngestTriggerTaskID(10000, "kb-1", "zh-CN", 30*time.Second, base.Add(30*time.Second))
+
+	if first != sameBucket {
+		t.Fatalf("same window produced different task IDs: %q vs %q", first, sameBucket)
+	}
+	if first == nextBucket {
+		t.Fatalf("next window should produce a new task ID: %q", first)
+	}
+
+	defaultLang := wikiIngestTriggerTaskID(10000, "kb-1", "", 30*time.Second, base)
+	if !strings.Contains(defaultLang, ":default:") {
+		t.Fatalf("empty language should be normalized in task ID, got %q", defaultLang)
 	}
 }
 

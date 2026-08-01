@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -156,7 +157,7 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 	//    until wiki generation actually finishes instead of flipping to
 	//    completed while wiki runs minutes later. A wiki op that never
 	//    drains is bounded by the housekeeping finalizing sweep.
-	willSpawnSummary := len(textChunks) > 0
+	willSpawnSummary := len(textChunks) > 0 && strings.TrimSpace(kb.SummaryModelID) != ""
 	willSpawnQuestion := willSpawnSummary && kb.NeedsEmbeddingModel() &&
 		eff.QuestionGenerationConfig.Enabled
 	willSpawnWiki := kb.IndexingStrategy.WikiEnabled && len(textChunks) > 0

@@ -389,9 +389,10 @@ func (r *knowledgeRepository) FinalizeSubtask(
 		Where("id = ? AND parse_status = ? AND pending_subtasks_count = 0",
 			id, types.ParseStatusFinalizing).
 		Updates(map[string]interface{}{
-			"parse_status": types.ParseStatusCompleted,
-			"processed_at": now,
-			"updated_at":   now,
+			"parse_status":  types.ParseStatusCompleted,
+			"error_message": "",
+			"processed_at":  now,
+			"updated_at":    now,
 		})
 	if promoteRes.Error != nil {
 		return 0, false, promoteRes.Error
@@ -434,6 +435,7 @@ func (r *knowledgeRepository) SetFinalizing(
 		Updates(map[string]interface{}{
 			"parse_status":           types.ParseStatusFinalizing,
 			"pending_subtasks_count": expectedSubtasks,
+			"error_message":          "",
 			"updated_at":             now,
 		})
 	if res.Error != nil {
