@@ -37,26 +37,26 @@ func (ModelUsageEvent) TableName() string {
 }
 
 type ModelUsageQuery struct {
-	Range      string
-	ModelType  ModelType
-	ModelID    string
-	Start      time.Time
-	End        time.Time
-	BucketSize time.Duration
+	Range       string
+	ModelType   ModelType
+	ModelID     string
+	Start       time.Time
+	End         time.Time
+	BucketSize  time.Duration
 	RecentLimit int
 }
 
 type ModelUsageSummary struct {
-	WindowStart     time.Time `json:"window_start"`
-	WindowEnd       time.Time `json:"window_end"`
-	RefreshSeconds  int       `json:"refresh_seconds"`
-	TotalCalls      int64     `json:"total_calls"`
-	TotalTokens     int64     `json:"total_tokens"`
-	PromptTokens    int64     `json:"prompt_tokens"`
-	CompletionTokens int64    `json:"completion_tokens"`
-	CachedTokens     int64    `json:"cached_tokens"`
-	ErrorCount       int64    `json:"error_count"`
-	SuccessRate      float64  `json:"success_rate"`
+	WindowStart      time.Time `json:"window_start"`
+	WindowEnd        time.Time `json:"window_end"`
+	RefreshSeconds   int       `json:"refresh_seconds"`
+	TotalCalls       int64     `json:"total_calls"`
+	TotalTokens      int64     `json:"total_tokens"`
+	PromptTokens     int64     `json:"prompt_tokens"`
+	CompletionTokens int64     `json:"completion_tokens"`
+	CachedTokens     int64     `json:"cached_tokens"`
+	ErrorCount       int64     `json:"error_count"`
+	SuccessRate      float64   `json:"success_rate"`
 }
 
 type ModelUsageModelStats struct {
@@ -76,7 +76,7 @@ type ModelUsageModelStats struct {
 	ErrorCount       int64       `json:"error_count"`
 	SuccessRate      float64     `json:"success_rate"`
 	AvgTokensPerCall float64     `json:"avg_tokens_per_call"`
-	LastUsedAt        *time.Time  `json:"last_used_at"`
+	LastUsedAt       *time.Time  `json:"last_used_at"`
 }
 
 type ModelUsageTimelinePoint struct {
@@ -93,8 +93,8 @@ type ModelUsageTimelinePoint struct {
 }
 
 type ModelUsageReport struct {
-	Summary      ModelUsageSummary        `json:"summary"`
-	Models       []ModelUsageModelStats   `json:"models"`
+	Summary      ModelUsageSummary         `json:"summary"`
+	Models       []ModelUsageModelStats    `json:"models"`
 	Timeline     []ModelUsageTimelinePoint `json:"timeline"`
-	RecentEvents []ModelUsageEvent        `json:"recent_events"`
+	RecentEvents []ModelUsageEvent         `json:"recent_events"`
 }
