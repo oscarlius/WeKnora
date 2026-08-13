@@ -554,6 +554,15 @@ type WikiConfig struct {
 	// this knob trades a single KB's peak throughput for cross-KB fairness.
 	// Set it >= the wiki pool size to effectively disable the cap.
 	IngestMaxInflight int `yaml:"ingest_max_inflight" json:"ingest_max_inflight,omitempty"`
+
+	// MaxPageContentBytes stops add-only updates from re-synthesizing an
+	// already oversized hub page. Retractions still regenerate the page.
+	// Zero preserves the historical unbounded behavior.
+	MaxPageContentBytes int `yaml:"max_page_content_bytes" json:"max_page_content_bytes,omitempty"`
+
+	// MaxRefs bounds chunk_refs to the most recent entries. Zero keeps all
+	// references for backwards compatibility.
+	MaxRefs int `yaml:"max_refs" json:"max_refs,omitempty"`
 }
 
 const MaxWikiSynthesisModelChainLength = 5

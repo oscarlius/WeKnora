@@ -170,10 +170,14 @@ func (s *wikiIngestService) newWikiBatchContext(
 	granularity := types.WikiExtractionStandard
 	contentInstructions := ""
 	extractionInstructions := ""
+	maxPageContentBytes := 0
+	maxRefs := 0
 	if wikiConfig != nil {
 		granularity = wikiConfig.ExtractionGranularity.Normalize()
 		contentInstructions = wikiConfig.ContentInstructions
 		extractionInstructions = wikiConfig.ExtractionInstructions
+		maxPageContentBytes = wikiConfig.MaxPageContentBytes
+		maxRefs = wikiConfig.MaxRefs
 	}
 	return &WikiBatchContext{
 		SlugTitle: func(ctx context.Context, slug string) string {
@@ -188,6 +192,8 @@ func (s *wikiIngestService) newWikiBatchContext(
 		ExtractionGranularity:  granularity,
 		ContentInstructions:    contentInstructions,
 		ExtractionInstructions: extractionInstructions,
+		MaxPageContentBytes:    maxPageContentBytes,
+		MaxRefs:                maxRefs,
 	}
 }
 
@@ -2013,7 +2019,8 @@ func (s *wikiIngestService) reduceSlugUpdates(
 		}
 	}
 
-	if len(additions) > 0 || len(retracts) > 0 {
+	contentCapped := shouldSkipWikiPageResynthesis(page, exists, additions, retracts, batchCtx)
+	if (len(additions) > 0 || len(retracts) > 0) && !contentCapped {
 		titles := batchCtx.SlugTitleMany(ctx, []string(page.OutLinks))
 
 		// slugHandles escape high-entropy slugs behind short reference handles
@@ -2122,6 +2129,13 @@ func (s *wikiIngestService) reduceSlugUpdates(
 		}
 	}
 
+	if contentCapped {
+		logger.Infof(ctx,
+			"wiki ingest: page %s content %d bytes >= cap %d; skipping add-only re-synthesis",
+			slug, len(page.Content), batchCtx.MaxPageContentBytes)
+		changed = true
+	}
+
 	// Apply the batch taxonomy plan, but only to pages that aren't already
 	// filed — so brand-new pages get a coherent folder while previously-filed
 	// or user-moved pages keep their placement (manual edits are authoritative).
@@ -2139,6 +2153,9 @@ func (s *wikiIngestService) reduceSlugUpdates(
 		// the existing refs; addition rounds append the newly-cited chunks
 		// on top of what was already there, deduplicated.
 		page.ChunkRefs = mergeChunkRefs(page.ChunkRefs, additions)
+		if batchCtx != nil && batchCtx.MaxRefs > 0 {
+			page.ChunkRefs = capRecentStringArray(page.ChunkRefs, batchCtx.MaxRefs)
+		}
 		if exists {
 			_, err = s.wikiService.UpdatePage(ctx, page)
 		} else {
@@ -2148,6 +2165,17 @@ func (s *wikiIngestService) reduceSlugUpdates(
 	}
 
 	return false, "", additionFailed, nil
+}
+
+func shouldSkipWikiPageResynthesis(
+	page *types.WikiPage,
+	exists bool,
+	additions, retracts []SlugUpdate,
+	batchCtx *WikiBatchContext,
+) bool {
+	return batchCtx != nil && batchCtx.MaxPageContentBytes > 0 && exists && page != nil &&
+		len(additions) > 0 && len(retracts) == 0 &&
+		len(page.Content) >= batchCtx.MaxPageContentBytes
 }
 
 // mergeChunkRefs unions the chunk IDs currently on the page with the ones
@@ -2179,4 +2207,13 @@ func mergeChunkRefs(current types.StringArray, additions []SlugUpdate) types.Str
 		}
 	}
 	return out
+}
+
+func capRecentStringArray(values types.StringArray, limit int) types.StringArray {
+	if limit <= 0 || len(values) <= limit {
+		return values
+	}
+	trimmed := make(types.StringArray, limit)
+	copy(trimmed, values[len(values)-limit:])
+	return trimmed
 }

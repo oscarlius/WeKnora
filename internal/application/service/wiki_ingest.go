@@ -1306,6 +1306,11 @@ type WikiBatchContext struct {
 	// pre-resolved ids and never races on folder creation. Read-only during
 	// reduce.
 	PlannedFolderID map[string]string
+
+	// MaxPageContentBytes and MaxRefs are resolved once from WikiConfig so
+	// every reduce worker applies the same write-amplification guards.
+	MaxPageContentBytes int
+	MaxRefs             int
 }
 
 // SlugUpdate represents a single update operation for a specific slug

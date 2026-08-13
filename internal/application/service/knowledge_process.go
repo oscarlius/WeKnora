@@ -1067,7 +1067,11 @@ func (s *knowledgeService) ProcessSummaryGeneration(ctx context.Context, t *asyn
 
 	if kb.SummaryModelID == "" {
 		logger.Warn(ctx, "Knowledge base summary model ID is empty, skipping summary generation")
-		_ = s.repo.UpdateKnowledgeColumn(ctx, payload.KnowledgeID, "summary_status", types.SummaryStatusFailed)
+		if err := s.repo.UpdateKnowledgeColumn(
+			ctx, payload.KnowledgeID, "summary_status", types.SummaryStatusNone,
+		); err != nil {
+			logger.Warnf(ctx, "Failed to reset summary status for skipped summary generation: %v", err)
+		}
 		summaryOut["skipped"] = "no_summary_model"
 		return nil
 	}

@@ -21,9 +21,14 @@ done
 
 # /data/files can contain a large production corpus. Recursively chowning it on
 # every container start can block readiness for minutes or hours, so only ensure
-# the mount root itself is writable by appuser.
+# the mount root itself is writable by default. Operators can opt into a one-off
+# recursive repair with WEKNORA_FIX_DATA_FILES_OWNERSHIP_RECURSIVE=true.
 if [ -d /data/files ]; then
-    chown appuser:appuser /data/files 2>/dev/null || true
+    if [ "${WEKNORA_FIX_DATA_FILES_OWNERSHIP_RECURSIVE:-false}" = "true" ]; then
+        chown -R appuser:appuser /data/files 2>/dev/null || true
+    else
+        chown appuser:appuser /data/files 2>/dev/null || true
+    fi
 fi
 
 # ─── Merge built-in skills into preloaded ───
