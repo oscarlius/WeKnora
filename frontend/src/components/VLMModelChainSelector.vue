@@ -15,6 +15,7 @@
           :model-type="modelType"
           :selected-model-id="modelId"
           :all-models="allModels"
+          :clearable="index === 0 && !primaryRequired"
           :status="index === 0 ? status : 'default'"
           :placeholder="index === 0 ? resolvedPrimaryPlaceholder : resolvedFallbackPlaceholder"
           @update:selected-model-id="(value: string) => updateModel(index, value)"

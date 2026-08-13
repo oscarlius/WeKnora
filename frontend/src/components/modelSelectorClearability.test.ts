@@ -3,6 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 
 const selector = readFileSync(new URL('./ModelSelector.vue', import.meta.url), 'utf8')
+const vlmChainSelector = readFileSync(new URL('./VLMModelChainSelector.vue', import.meta.url), 'utf8')
 const agentEditor = readFileSync(new URL('../views/agent/AgentEditorModal.vue', import.meta.url), 'utf8')
 const kbModelConfig = readFileSync(new URL('../views/knowledge/settings/KBModelConfig.vue', import.meta.url), 'utf8')
 const kbEditor = readFileSync(new URL('../views/knowledge/KnowledgeBaseEditorModal.vue', import.meta.url), 'utf8')
@@ -13,6 +14,14 @@ function modelSelectorTag(source: string, selectedModelBinding: string): string 
     .match(/<ModelSelector\b[\s\S]*?\/>/g)
     ?.find((candidate) => candidate.includes(selectedModelBinding))
   assert.ok(tag, `找不到模型选择器：${selectedModelBinding}`)
+  return tag
+}
+
+function vlmChainSelectorTag(source: string, modelIdsBinding: string): string {
+  const tag = source
+    .match(/<VLMModelChainSelector\b[\s\S]*?\/>/g)
+    ?.find((candidate) => candidate.includes(modelIdsBinding))
+  assert.ok(tag, `找不到模型链选择器：${modelIdsBinding}`)
   return tag
 }
 
@@ -41,15 +50,23 @@ test('智能体中允许继承或关闭的可选模型可以恢复为空', () =>
 test('知识库仅在模型确实可选时允许恢复为空', () => {
   const embedding = modelSelectorTag(kbModelConfig, 'config.embeddingModelId')
   assert.match(embedding, /:clearable="ragEnabled === false && wikiEnabled"/)
-  assertClearable(modelSelectorTag(kbModelConfig, 'config.wikiSynthesisModelId'))
+  const wikiSynthesis = vlmChainSelectorTag(kbModelConfig, 'config.wikiSynthesisModelIds')
+  assert.match(wikiSynthesis, /:primary-required="false"/)
+  assert.match(vlmChainSelector, /:clearable="index === 0 && !primaryRequired"/)
 })
 
 test('必填模型继续保持不可清空', () => {
   assertNotClearable(modelSelectorTag(agentEditor, 'formData.config.model_id'))
   assertNotClearable(modelSelectorTag(agentEditor, 'formData.config.vlm_model_id'))
   assertNotClearable(modelSelectorTag(kbModelConfig, 'config.llmModelId'))
-  assertNotClearable(modelSelectorTag(kbEditor, 'formData.multimodalConfig.vllmModelId'))
+  assert.doesNotMatch(
+    vlmChainSelectorTag(kbEditor, 'formData.multimodalConfig.vllmModelIds'),
+    /:primary-required="false"/,
+  )
   assertNotClearable(modelSelectorTag(kbEditor, 'formData.asrConfig.modelId'))
-  assertNotClearable(modelSelectorTag(uploadConfirm, 'uiState.multimodalConfig.vllmModelId'))
+  assert.doesNotMatch(
+    vlmChainSelectorTag(uploadConfirm, 'uiState.multimodalConfig.vllmModelIds'),
+    /:primary-required="false"/,
+  )
   assertNotClearable(modelSelectorTag(uploadConfirm, 'uiState.asrConfig.modelId'))
 })
