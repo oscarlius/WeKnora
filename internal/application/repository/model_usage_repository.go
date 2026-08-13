@@ -103,9 +103,34 @@ func (r *modelUsageRepository) modelStats(
 	tenantID uint64,
 	query types.ModelUsageQuery,
 ) ([]types.ModelUsageModelStats, error) {
-	var rows []types.ModelUsageModelStats
+	// MAX() loses the column's temporal type under sqlite (the driver returns
+	// a string that cannot scan into *time.Time), so aggregate as epoch
+	// seconds and convert in Go on both dialects.
+	lastUsedExpr := "CAST(FLOOR(EXTRACT(EPOCH FROM MAX(e.created_at))) AS BIGINT)"
+	if r.db.Dialector.Name() == "sqlite" {
+		lastUsedExpr = "CAST(strftime('%s', MAX(e.created_at)) AS INTEGER)"
+	}
+
+	type modelStatsRow struct {
+		ModelID          string
+		ModelName        string
+		DisplayName      string
+		ModelType        types.ModelType
+		ModelSource      types.ModelSource
+		Provider         string
+		Calls            int64
+		PromptTokens     int64
+		CompletionTokens int64
+		CachedTokens     int64
+		TotalTokens      int64
+		InputItems       int64
+		DurationMs       int64
+		ErrorCount       int64
+		LastUsedEpoch    int64
+	}
+	var rows []modelStatsRow
 	err := r.filteredEvents(ctx, tenantID, query).
-		Select(`
+		Select(fmt.Sprintf(`
 			e.model_id AS model_id,
 			e.model_name AS model_name,
 			COALESCE(m.display_name, '') AS display_name,
@@ -120,12 +145,37 @@ func (r *modelUsageRepository) modelStats(
 			COALESCE(SUM(e.input_items), 0) AS input_items,
 			COALESCE(SUM(e.duration_ms), 0) AS duration_ms,
 			COALESCE(SUM(CASE WHEN e.success THEN 0 ELSE 1 END), 0) AS error_count,
-			MAX(e.created_at) AS last_used_at`).
+			%s AS last_used_epoch`, lastUsedExpr)).
 		Joins("LEFT JOIN models m ON m.id = e.model_id AND (m.tenant_id = e.tenant_id OR m.is_builtin = true) AND m.deleted_at IS NULL").
 		Group("e.model_id, e.model_name, m.display_name, e.model_type, e.model_source, e.provider").
 		Order("total_tokens DESC, calls DESC, model_name ASC").
 		Scan(&rows).Error
-	return rows, err
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make([]types.ModelUsageModelStats, 0, len(rows))
+	for _, row := range rows {
+		lastUsedAt := time.Unix(row.LastUsedEpoch, 0).UTC()
+		stats = append(stats, types.ModelUsageModelStats{
+			ModelID:          row.ModelID,
+			ModelName:        row.ModelName,
+			DisplayName:      row.DisplayName,
+			ModelType:        row.ModelType,
+			ModelSource:      row.ModelSource,
+			Provider:         row.Provider,
+			Calls:            row.Calls,
+			PromptTokens:     row.PromptTokens,
+			CompletionTokens: row.CompletionTokens,
+			CachedTokens:     row.CachedTokens,
+			TotalTokens:      row.TotalTokens,
+			InputItems:       row.InputItems,
+			DurationMs:       row.DurationMs,
+			ErrorCount:       row.ErrorCount,
+			LastUsedAt:       &lastUsedAt,
+		})
+	}
+	return stats, nil
 }
 
 func (r *modelUsageRepository) timeline(
