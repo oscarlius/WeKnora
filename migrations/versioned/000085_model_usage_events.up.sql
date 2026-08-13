@@ -1,8 +1,8 @@
--- Migration: 000079_model_usage_events
+-- Migration: 000085_model_usage_events
 -- Stores per-model usage counters for the native WeKnora model usage dashboard.
 -- The table deliberately does not store prompts, retrieved documents, image
 -- bytes, audio bytes, or model outputs.
-DO $$ BEGIN RAISE NOTICE '[Migration 000079] Creating table: model_usage_events'; END $$;
+DO $$ BEGIN RAISE NOTICE '[Migration 000085] Creating table: model_usage_events'; END $$;
 
 CREATE TABLE IF NOT EXISTS model_usage_events (
     id                BIGSERIAL PRIMARY KEY,
@@ -36,4 +36,4 @@ CREATE INDEX IF NOT EXISTS idx_model_usage_events_tenant_model_time
 CREATE INDEX IF NOT EXISTS idx_model_usage_events_tenant_type_time
     ON model_usage_events (tenant_id, model_type, created_at DESC);
 
-DO $$ BEGIN RAISE NOTICE '[Migration 000079] model_usage_events table ready'; END $$;
+DO $$ BEGIN RAISE NOTICE '[Migration 000085] model_usage_events table ready'; END $$;

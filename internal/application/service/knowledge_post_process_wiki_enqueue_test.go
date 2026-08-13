@@ -125,7 +125,8 @@ func newWikiEnqueueTestService(
 	return &KnowledgePostProcessService{
 		knowledgeRepo: repo,
 		kbService: &wikiEnqueueFailureKBService{kb: &types.KnowledgeBase{
-			ID: "kb-wiki",
+			ID:             "kb-wiki",
+			SummaryModelID: "summary-model",
 			IndexingStrategy: types.IndexingStrategy{
 				WikiEnabled: true,
 			},
