@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -16,10 +17,16 @@ import (
 	"github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/storageurl"
 	"github.com/Tencent/WeKnora/internal/types"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+)
+
+const (
+	maxAttachmentUploadsPerRequest = 5
+	maxAttachmentUploadTotalBytes  = int64(100 * 1024 * 1024)
 )
 
 // qaRequestContext holds all the common data needed for QA requests
@@ -51,6 +58,10 @@ type qaRequestContext struct {
 	attachmentIDs         []string                 // Pre-uploaded session-scoped document IDs, resolved after SSE starts
 	attachmentMetas       types.MessageAttachments // Metadata-only view of attachmentIDs for the persisted user message
 	suggestionAttribution *types.SuggestionAttribution
+	// resourceRewriter turns internal storage references in the outbound stream
+	// into directly loadable URLs when the caller asks for `resource_urls=public`.
+	// Disabled (a pass-through) in the default handle mode.
+	resourceRewriter *storageurl.StreamRewriter
 
 	// Snapshot of the request fields needed to persist the input-bar state
 	// for session restoration. Kept verbatim from the request so we record
@@ -108,6 +119,14 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	if request.Query == "" {
 		logger.Error(ctx, "Query content is empty")
 		return nil, nil, errors.NewBadRequestError("Query content cannot be empty")
+	}
+
+	// Resolve the storage-reference representation up front: once the SSE stream
+	// has started an invalid value can no longer be reported as a 400.
+	resourceRewriter, err := h.resolveStreamRewriter(c)
+	if err != nil {
+		logger.Warnf(ctx, "Rejected resource URL mode: %v", err)
+		return nil, nil, err
 	}
 	if h.suggestionService != nil && request.SuggestionAttribution != nil {
 		if err := h.suggestionService.ValidateAttribution(ctx, sessionID, request.Query, request.SuggestionAttribution); err != nil {
@@ -199,15 +218,17 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	if len(request.AttachmentUploads) > 0 {
 		logger.Infof(ctx, "[%s] processing %d attachment(s)", logPrefix, len(request.AttachmentUploads))
 
-		// MAX_FILE_SIZE_MB env (50MB default). See utils/filesize.go for
-		// why this is deploy-time-only rather than a runtime setting.
-		maxSizeMB := secutils.GetMaxFileSizeMB()
-		maxSize := maxSizeMB * 1024 * 1024
-		for i, upload := range request.AttachmentUploads {
-			if upload.FileSize > maxSize {
-				return nil, nil, errors.NewBadRequestError(
-					fmt.Sprintf("attachment %d exceeds size limit of %dMB", i+1, maxSizeMB))
-			}
+		// Decode first and validate actual bytes. Client-declared file_size is
+		// metadata only and must not be trusted for memory or sandbox limits.
+		maxSize := secutils.GetMaxFileSize()
+		decodedAttachments, decodeErr := decodeAndValidateAttachmentUploads(
+			request.AttachmentUploads,
+			maxAttachmentUploadsPerRequest,
+			maxSize,
+			maxAttachmentUploadTotalBytes,
+		)
+		if decodeErr != nil {
+			return nil, nil, errors.NewBadRequestError(decodeErr.Error())
 		}
 
 		tenantID := c.GetUint64(types.TenantIDContextKey.String())
@@ -222,6 +243,17 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 			asrModelID = customAgent.Config.ASRModelID
 		}
 
+		// Resolve the agent's chat parser engine from attachment file types
+		if customAgent != nil {
+			for _, att := range request.AttachmentUploads {
+				ext := strings.ToLower(filepath.Ext(att.FileName))
+				if engine := customAgent.Config.ResolveChatParserEngine(ext); engine != "" {
+					attachmentRuntimeCtx = context.WithValue(attachmentRuntimeCtx, types.ChatParserEngineContextKey, engine)
+					break
+				}
+			}
+		}
+
 		// Process all attachments concurrently.
 		processedAttachments = make(types.MessageAttachments, len(request.AttachmentUploads))
 		var wg sync.WaitGroup
@@ -232,14 +264,8 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 			go func(idx int, att AttachmentUpload) {
 				defer wg.Done()
 
-				data, err := DecodeBase64Attachment(att.Data)
-				if err != nil {
-					errChan <- fmt.Errorf("attachment %d decode failed: %w", idx+1, err)
-					return
-				}
-
 				processed, err := h.attachmentProcessor.ProcessAttachment(
-					attachmentRuntimeCtx, data, att.FileName, att.FileSize, tenantID, asrModelID,
+					attachmentRuntimeCtx, decodedAttachments[idx], att.FileName, int64(len(decodedAttachments[idx])), tenantID, asrModelID,
 				)
 				if err != nil {
 					errChan <- fmt.Errorf("attachment %d processing failed: %w", idx+1, err)
@@ -360,9 +386,38 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		suggestionAttribution: request.SuggestionAttribution,
 		reqAgentEnabled:       request.AgentEnabled,
 		reqAgentID:            request.AgentID,
+		resourceRewriter:      resourceRewriter,
 	}
 
 	return reqCtx, &request, nil
+}
+
+func decodeAndValidateAttachmentUploads(
+	uploads []AttachmentUpload,
+	maxCount int,
+	maxFileBytes, maxTotalBytes int64,
+) ([][]byte, error) {
+	if len(uploads) > maxCount {
+		return nil, fmt.Errorf("at most %d attachments are allowed per request", maxCount)
+	}
+	decoded := make([][]byte, len(uploads))
+	var total int64
+	for i, upload := range uploads {
+		data, err := DecodeBase64Attachment(upload.Data)
+		if err != nil {
+			return nil, fmt.Errorf("attachment %d decode failed: %w", i+1, err)
+		}
+		actualSize := int64(len(data))
+		if actualSize > maxFileBytes {
+			return nil, fmt.Errorf("attachment %d exceeds size limit of %d bytes", i+1, maxFileBytes)
+		}
+		total += actualSize
+		if total > maxTotalBytes {
+			return nil, fmt.Errorf("attachments exceed total request limit of %d bytes", maxTotalBytes)
+		}
+		decoded[i] = data
+	}
+	return decoded, nil
 }
 
 func buildMessageExecutionContext(
@@ -378,10 +433,7 @@ func buildMessageExecutionContext(
 	skillNames []string,
 	webSearchEnabled bool,
 ) (types.MessageExecutionContext, string, uint64, string) {
-	locale, ok := types.LanguageFromContext(ctx)
-	if !ok {
-		locale = types.DefaultLanguage()
-	}
+	locale := types.LanguageFromContextOrDefault(ctx)
 
 	snapshot := types.MessageExecutionContext{
 		KnowledgeBaseIDs: knowledgeBaseIDs,
@@ -574,6 +626,10 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 			logger.Infof(reqCtx.ctx, "Using effective tenant %d for shared agent (model/KB/MCP)", reqCtx.effectiveTenantID)
 		}
 	}
+	// The session's sandbox stays bound to the session owner even when the
+	// borrowed tenant above drives everything else, because DeleteSession tears
+	// that sandbox down from a request that only knows the session's tenant.
+	baseCtx = types.WithSandboxTenantID(baseCtx, reqCtx.session.TenantID)
 
 	// Create EventBus and cancellable context
 	eventBus := event.NewEventBus()
@@ -602,7 +658,7 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 
 	// Setup stream handler
 	h.setupStreamHandler(asyncCtx, reqCtx.sessionID, reqCtx.assistantMessage.ID,
-		reqCtx.requestID, reqCtx.receivedAt, reqCtx.assistantMessage, eventBus)
+		reqCtx.requestID, reqCtx.session.TenantID, reqCtx.receivedAt, reqCtx.assistantMessage, eventBus)
 
 	// Generate title if needed
 	if generateTitle && reqCtx.session.Title == "" {
@@ -625,6 +681,7 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 // @Accept       json
 // @Produce      json
 // @Param        request  body      SearchKnowledgeRequest  true  "搜索请求"
+// @Param        resource_urls  query     string  false  "文件引用形式，public 返回可加载直链"  Enums(handle, public)  default(handle)
 // @Success      200      {object}  map[string]interface{}  "搜索结果"
 // @Failure      400      {object}  errors.AppError         "请求参数错误"
 // @Security     Bearer
@@ -646,6 +703,15 @@ func (h *Handler) SearchKnowledge(c *gin.Context) {
 	if request.Query == "" {
 		logger.Error(ctx, "Query content is empty")
 		c.Error(errors.NewBadRequestError("Query content cannot be empty"))
+		return
+	}
+
+	// Resolve the storage-reference representation before retrieving, so a typo
+	// or a rejected scope costs nothing.
+	rewriter, err := h.resolveResourceRewriter(c)
+	if err != nil {
+		logger.Warnf(ctx, "Rejected resource URL mode: %v", err)
+		_ = c.Error(err)
 		return
 	}
 
@@ -704,7 +770,7 @@ func (h *Handler) SearchKnowledge(c *gin.Context) {
 	logger.Infof(ctx, "Knowledge search completed, found %d results", len(searchResults))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    searchResults,
+		"data":    rewriter.CopyReferences(ctx, searchResults),
 	})
 }
 
@@ -716,11 +782,12 @@ func (h *Handler) SearchKnowledge(c *gin.Context) {
 // @Produce      text/event-stream
 // @Param        session_id  path      string                   true  "会话ID"
 // @Param        request     body      CreateKnowledgeQARequest true  "问答请求"
+// @Param        resource_urls  query     string  false  "文件引用形式，public 返回可加载直链"  Enums(handle, public)  default(handle)
 // @Success      200         {object}  map[string]interface{}   "问答结果（SSE流）"
 // @Failure      400         {object}  errors.AppError          "请求参数错误"
 // @Security     Bearer
 // @Security     ApiKeyAuth
-// @Router       /sessions/{session_id}/knowledge-qa [post]
+// @Router       /knowledge-chat/{session_id} [post]
 func (h *Handler) KnowledgeQA(c *gin.Context) {
 	// Parse and validate request
 	reqCtx, request, err := h.parseQARequest(c, "KnowledgeQA")
@@ -741,11 +808,12 @@ func (h *Handler) KnowledgeQA(c *gin.Context) {
 // @Produce      text/event-stream
 // @Param        session_id  path      string                   true  "会话ID"
 // @Param        request     body      CreateKnowledgeQARequest true  "问答请求"
+// @Param        resource_urls  query     string  false  "文件引用形式，public 返回可加载直链"  Enums(handle, public)  default(handle)
 // @Success      200         {object}  map[string]interface{}   "问答结果（SSE流）"
 // @Failure      400         {object}  errors.AppError          "请求参数错误"
 // @Security     Bearer
 // @Security     ApiKeyAuth
-// @Router       /sessions/{session_id}/agent-qa [post]
+// @Router       /agent-chat/{session_id} [post]
 func (h *Handler) AgentQA(c *gin.Context) {
 	// Parse and validate request
 	reqCtx, request, err := h.parseQARequest(c, "AgentQA")
@@ -980,7 +1048,7 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 	// Handle SSE events (blocking)
 	shouldWaitForTitle := generateTitle && reqCtx.session.Title == ""
 	h.handleAgentEventsForSSE(ctx, reqCtx.c, sessionID, reqCtx.assistantMessage.ID,
-		reqCtx.requestID, streamCtx.eventBus, shouldWaitForTitle)
+		reqCtx.requestID, streamCtx.eventBus, shouldWaitForTitle, reqCtx.resourceRewriter)
 }
 
 // runVLMAnalysisIfNeeded runs VLM image analysis within the async goroutine,

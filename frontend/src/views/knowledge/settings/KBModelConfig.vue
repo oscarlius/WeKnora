@@ -52,6 +52,7 @@
             :selected-model-id="config.embeddingModelId"
             :all-models="allModels"
             :disabled="ragEnabled && hasFiles"
+            :clearable="ragEnabled === false && wikiEnabled"
             @update:selected-model-id="handleEmbeddingChange"
             @add-model="handleAddModel('embedding')"
             :placeholder="$t('knowledgeEditor.models.embeddingPlaceholder')"
