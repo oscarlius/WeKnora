@@ -9,15 +9,17 @@ set -e
 # by official postgres/redis images.
 
 # Directories that may be bind-mounted and need appuser access
-MOUNT_DIRS=(
-    /data/files
-)
-
-for dir in "${MOUNT_DIRS[@]}"; do
-    if [ -d "$dir" ]; then
-        chown -R appuser:appuser "$dir" 2>/dev/null || true
+# /data/files can contain a large production corpus. Recursively chowning it on
+# every container start can block readiness for minutes or hours, so only ensure
+# the mount root itself is writable by default. Operators can opt into a one-off
+# recursive repair with WEKNORA_FIX_DATA_FILES_OWNERSHIP_RECURSIVE=true.
+if [ -d /data/files ]; then
+    if [ "${WEKNORA_FIX_DATA_FILES_OWNERSHIP_RECURSIVE:-false}" = "true" ]; then
+        chown -R appuser:appuser /data/files 2>/dev/null || true
+    else
+        chown appuser:appuser /data/files 2>/dev/null || true
     fi
-done
+fi
 
 # ─── Docker socket access for the sandbox backend ───
 # The Engine API socket is typically root:docker 0660. This process then
