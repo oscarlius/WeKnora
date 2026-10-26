@@ -1558,6 +1558,13 @@ export default {
       kbMetricRag: 'RAG 知識庫',
       kbMetricWiki: 'Wiki 知識庫',
       statusInactive: '有 {count} 個已勾選工具在當前設定下無法生效',
+      searchConversations: '回顧歷史對話',
+      searchConversationsDesc: '在使用者自己的歷史會話中查找之前聊過的內容',
+      groupStored: '已儲存但未提供的工具',
+      switchManagedDesc: '由智慧體的其他設定控制，而不是由此列表決定，在此勾選不會啟用它。取消勾選即可移除。',
+      unrecognizedDesc: '目前版本不提供此工具，智慧體無法呼叫它。取消勾選即可移除。',
+      keptUnknownWarning: '已儲存。以下已儲存的工具在目前版本中不提供，已保留，但智慧體無法呼叫：{names}',
+      droppedWarning: '已儲存。以下工具由智慧體的其他設定控制，已從工具列表中移除：{names}',
       effectiveLabel: '最終啟用的工具',
       effectiveDesc: '根據當前設定計算，這是智慧代理儲存後實際能呼叫的工具集合',
       effectiveEmpty: '當前沒有可用工具，智慧代理將退化為純模型問答'
@@ -1826,6 +1833,22 @@ export default {
       heading: '技能檔案',
       script: '指令碼',
       instructions: '技能說明'
+    },
+    attachmentTarget: {
+      list: '全部附件',
+      file: '附件',
+      images: '{name} 中的圖片',
+      imagesUnnamed: '附件中的圖片',
+      image: '{name} 第 {n} 張圖片',
+      imageUnnamed: '附件第 {n} 張圖片'
+    },
+    imageView: {
+      summary: '已查看「{file}」第 {numbers} 張圖片，共 {total} 張',
+      single: '已查看圖片「{file}」',
+      descriptionsHeading: '視覺模型的圖片描述',
+      imageLabel: '圖片 #{n}',
+      noDescription: '未能生成描述',
+      remaining: '還有 {count} 張未查看'
     },
     sandboxFiles: {
       found: '找到 {count} 個檔案',
@@ -2401,6 +2424,9 @@ export default {
     "serverDocumentation": "伺服器端原始說明",
     "noServerDocumentation": "該 MCP Server 的 initialize 未返回 instructions / serverInfo.description（均為可選欄位）。工具說明在下方各工具的 description 裡。",
     "policyHint": "工具開關與審批設定即時儲存；重新整理目錄不會覆蓋這些設定。",
+    "columnTool": "工具",
+    "columnEnabled": "啟用",
+    "columnApproval": "需審批",
     "failed": "工具目錄讀取失敗",
     "setupProgress": "MCP 設定步驟",
     "connection": "連結設定",
@@ -2443,6 +2469,9 @@ export default {
     authTypeApiKey: 'API Key / Token',
     authTypeOAuth: 'OAuth 2.0（首次連結授權）',
     oauthScopes: 'Scopes（可選，空格分隔）',
+    oauthClientId: 'Client ID（可選）',
+    oauthClientIdDesc: '填寫在授權伺服器預先註冊的用戶端；留空則自動進行動態用戶端註冊。更換 Client ID 時請同時更新 Client Secret。',
+    oauthClientSecret: 'Client Secret（可選）',
     oauthAuthorization: '授權狀態',
     oauthAuthorized: '已授權',
     oauthRefreshable: 'Token 已過期，將在下次使用時自動重新整理',
@@ -3655,6 +3684,10 @@ export default {
           title: '{count} 個任務待處理',
           description: '點擊下方表中紅色「最終失敗」數字查看原因，修復後可手動重試。'
         },
+        history: { title: '保留的佇列歷史', description: '{archived} 筆歷史失敗封存 · {completed} 筆保留的完成記錄；它們是歷史記錄，不是目前工作。' },
+        reparse: {
+          title: '重新解析批次', description: '追蹤批次會保留固定成員。文件目前業務狀態會獨立更新，後續重新解析可能改變群組計數。', kbFilter: '依知識庫 ID 篩選', empty: '沒有已追蹤的重新解析批次', loadError: '載入重新解析批次失敗', frozenTotal: '{count} 筆記錄', previous: '上一頁', next: '下一頁', allStates: '全部狀態', stateFilter: '依成員狀態篩選', membersTitle: '批次成員 · {name}', membersDescription: "成員在登記時固定，進度跟隨文件目前解析狀態。完成比例為已完成文件數 / 總成員數，失敗與取消不計入完成；摘要狀態獨立統計。後續重建會改變目前進度。", membersEmpty: '沒有符合該狀態的成員', membersLoadError: '載入批次成員失敗', modes: { managed: "受管提交", tracking_only: "僅追蹤" }, columns: { batch: '批次', knowledgeBase: '知識庫', mode: '模式', completed: '完成 / 總數', successRatio: "完成比例", currentState: '目前狀態' }, members: { columns: { document: '文件', batchState: '批次狀態', parseState: '解析狀態', summaryState: '摘要狀態', error: '提交錯誤' } }, summary: { none: "無摘要", completed: "已完成", unknown: "未知", pending: '待處理', processing: '處理中', failed: '失敗' }, states: { waiting_start: '等待開始', queued: '已排隊', processing: '處理中', finalizing: '收尾中', completed: '已完成', failed: '失敗', cancelled: '已取消', missing: '缺失', submission_failed: '提交失敗', unknown: '未知' }
+        },
         status: {
           working: '處理中',
           waiting: '等待中',
@@ -3669,8 +3702,7 @@ export default {
           pending: '排隊',
           scheduled: '定時',
           retry: '重試',
-          archived: '最終失敗',
-          completed: '已完成',
+          todaySuccess: '今日成功', todayFailedAttempts: '今日失敗嘗試', archived: '歷史失敗封存', completed: '保留的完成記錄',
           latency: '最早等待',
           status: '狀態'
         },
@@ -3678,8 +3710,9 @@ export default {
           title: '運行概覽',
           active: '運行中',
           pending: '排隊中',
+          scheduled: '定時',
           retry: '重試中',
-          archived: '最終失敗'
+          todaySuccess: '今日成功', todayFailedAttempts: '今日失敗嘗試', dailyFormula: "今日成功 = max(今日 processed − 今日 failed, 0)。兩項皆為當日任務執行次數，包含重試，不是完成的文件數；每日重設。"
         },
         pools: {
           core: '核心解析',
@@ -3971,7 +4004,8 @@ export default {
     truncatedHint: '回答在模型單次輸出上限處被截斷，以上為截斷前已生成的內容',
     rewind: {
       tooltip: '回滾到這裡',
-      confirmBody: '將刪除此條之後的對話。從使用者訊息回滾時會刪掉該問題本身，並填回輸入框。若有可用檢查點，工作區會一併回退。此操作不可復原。',
+      confirmTitle: '回滾到這裡？',
+      confirmBody: '此條之後的對話將被刪除；從提問回滾時，該問題會填回輸入框。有檢查點時工作區也會一併回退，操作不可復原。',
       confirmButton: '回滾',
       cancelButton: '取消',
       success: '已回滾',
@@ -5314,7 +5348,13 @@ export default {
     mcpStale: '需重新同步',
     belongsToKb: '所屬知識庫：',
     belongsToOrg: '所屬空間：',
-    noCompatibleKbForAgent: '當前智慧代理的工具與作用域內知識庫的能力不比對，暫無可引用的知識庫。'
+    noCompatibleKbForAgent: '當前智慧代理的工具與作用域內知識庫的能力不比對，暫無可引用的知識庫。',
+    tag: '標籤',
+    searchPlaceholder: '搜尋知識庫、檔案、技能等',
+    searchInGroup: '在{group}中搜尋…',
+    typeToSearch: "在 {'@'} 後繼續輸入以搜尋…",
+    viewAll: '檢視全部',
+    back: '返回'
   },
   common: {
     add: '新增',
@@ -6235,6 +6275,7 @@ export default {
       skillTranscriptLive: '安裝過程',
       skillTranscriptLiveHint: '正在安裝，點擊查看過程',
       skillTranscriptTitle: '安裝過程',
+      skillTranscriptPrompt: '安裝指令',
       skillTranscriptHide: '收起安裝過程',
       skillGuidance: {
         placeholder: '補充安裝說明，例如需要安裝的 CLI、安裝文件或環境限制',
@@ -6353,6 +6394,7 @@ export default {
       installedCount: '已安裝到 {count} 個沙箱',
       installPanelGroup: '已安裝',
       installPanelAvailable: '未安裝',
+      installAction: '安裝',
       viewInstallProgress: '查看進度',
       manageOnSandbox: '管理沙箱「{name}」上的安裝',
       manageDrawerDesc: '在沙箱「{name}」上管理啟用、變數和解除安裝。',
@@ -7809,6 +7851,7 @@ export default {
   },
   menu: {
     sessionInProgress: '會話進行中',
+    sessionUnread: '有新回覆',
     knowledgeBase: '知識庫',
     agents: '智慧代理',
     artifacts: '產物',

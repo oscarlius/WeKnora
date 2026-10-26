@@ -1558,6 +1558,13 @@ export default {
       kbMetricRag: 'RAG 知识库',
       kbMetricWiki: 'Wiki 知识库',
       statusInactive: '有 {count} 个已勾选工具在当前配置下无法生效',
+      searchConversations: '回顾历史对话',
+      searchConversationsDesc: '在用户自己的历史会话中查找之前聊过的内容',
+      groupStored: '已保存但未提供的工具',
+      switchManagedDesc: '由智能体的其他设置控制，而不是由此列表决定，在此勾选不会启用它。取消勾选即可移除。',
+      unrecognizedDesc: '当前版本不提供该工具，智能体无法调用它。取消勾选即可移除。',
+      keptUnknownWarning: '已保存。以下已保存的工具在当前版本中不提供，已保留，但智能体无法调用：{names}',
+      droppedWarning: '已保存。以下工具由智能体的其他设置控制，已从工具列表中移除：{names}',
       effectiveLabel: '最终启用的工具',
       effectiveDesc: '根据当前配置计算，这是智能体保存后实际能调用的工具集合',
       effectiveEmpty: '当前没有可用工具，智能体将退化为纯模型问答'
@@ -1826,6 +1833,22 @@ export default {
       heading: '技能文件',
       script: '脚本',
       instructions: '技能说明'
+    },
+    attachmentTarget: {
+      list: '全部附件',
+      file: '附件',
+      images: '{name} 中的图片',
+      imagesUnnamed: '附件中的图片',
+      image: '{name} 第 {n} 张图片',
+      imageUnnamed: '附件第 {n} 张图片'
+    },
+    imageView: {
+      summary: '已查看「{file}」第 {numbers} 张图片，共 {total} 张',
+      single: '已查看图片「{file}」',
+      descriptionsHeading: '视觉模型的图片描述',
+      imageLabel: '图片 #{n}',
+      noDescription: '未能生成描述',
+      remaining: '还有 {count} 张未查看'
     },
     sandboxFiles: {
       found: '找到 {count} 个文件',
@@ -2401,6 +2424,9 @@ export default {
     "serverDocumentation": "服务端原始说明",
     "noServerDocumentation": "该 MCP Server 的 initialize 未返回 instructions / serverInfo.description（均为可选字段）。工具说明在下方各工具的 description 里。",
     "policyHint": "工具开关与审批设置即时保存；刷新目录不会覆盖这些设置。",
+    "columnTool": "工具",
+    "columnEnabled": "启用",
+    "columnApproval": "需审批",
     "failed": "工具目录读取失败",
     "setupProgress": "MCP 配置步骤",
     "connection": "连接配置",
@@ -2443,6 +2469,9 @@ export default {
     authTypeApiKey: 'API Key / Token',
     authTypeOAuth: 'OAuth 2.0（首次连接授权）',
     oauthScopes: 'Scopes（可选，空格分隔）',
+    oauthClientId: 'Client ID（可选）',
+    oauthClientIdDesc: '填写在授权服务器预先注册的客户端；留空则自动进行动态客户端注册。更换 Client ID 时请同时更新 Client Secret。',
+    oauthClientSecret: 'Client Secret（可选）',
     oauthAuthorization: '授权状态',
     oauthAuthorized: '已授权',
     oauthRefreshable: 'Token 已过期，将在下次使用时自动刷新',
@@ -3529,7 +3558,7 @@ export default {
         unavailable: '当前部署未启用 Redis / asynq 队列（Lite 模式），无队列可展示。',
         empty: '暂无队列数据',
         detailsTitle: '队列明细',
-        detailsDescription: '各处理通道的实时负载与等待情况。“最终失败”表示任务超过重试上限，已停止自动执行。',
+        detailsDescription: '各处理通道的实时负载与等待情况。“历史失败归档”表示任务超过重试上限后保留的历史记录，不是当前积压。',
         poolsTitle: 'Worker 池',
         poolsDescription: '各阶段拥有保底容量，核心解析与内容富化还可借用共享弹性池。',
         perInstance: '卡片主值为集群运行中/容量',
@@ -3626,7 +3655,7 @@ export default {
             pending: '排队中',
             scheduled: '定时执行',
             retry: '重试中',
-            archived: '最终失败',
+            archived: '历史失败归档',
             completed: '已完成'
           },
           taskTypes: {
@@ -3655,6 +3684,14 @@ export default {
           title: '{count} 个任务待处理',
           description: '点击下方表中红色「最终失败」数字查看原因，修复后可手动重试。'
         },
+        history: { title: '保留的队列历史', description: '{archived} 条历史失败归档 · {completed} 条保留的成功记录；它们是历史记录，不是当前任务。' },
+        reparse: {
+          title: '重新解析批次', description: '追踪批次会保留固定成员。文档当前业务状态独立刷新，后续重新解析可能改变组内计数。', kbFilter: '按知识库 ID 筛选', empty: '没有已追踪的重新解析批次', loadError: '加载重新解析批次失败', frozenTotal: '{count} 条记录', previous: '上一页', next: '下一页', allStates: '全部状态', stateFilter: '按成员状态筛选', membersTitle: '批次成员 · {name}', membersDescription: "成员在登记时固定，进度跟随文档当前解析状态。完成比例为已完成文档数 / 总成员数，失败和取消不计入完成；摘要状态单独统计。后续重建会改变当前进度。", membersEmpty: '没有符合该状态的成员', membersLoadError: '加载批次成员失败',
+          modes: { managed: "托管提交", tracking_only: "仅追踪" }, columns: { batch: '批次', knowledgeBase: '知识库', mode: '模式', completed: '完成 / 总数', successRatio: "完成比例", currentState: '当前状态' },
+          members: { columns: { document: '文档', batchState: '批次状态', parseState: '解析状态', summaryState: '摘要状态', error: '提交错误' } },
+          summary: { none: "无摘要", completed: "已完成", unknown: "未知", pending: '待处理', processing: '处理中', failed: '失败' },
+          states: { waiting_start: '等待开始', queued: '已排队', processing: '处理中', finalizing: '收尾中', completed: '已完成', failed: '失败', cancelled: '已取消', missing: '缺失', submission_failed: '提交失败', unknown: '未知' }
+        },
         status: {
           working: '处理中',
           waiting: '等待中',
@@ -3669,8 +3706,10 @@ export default {
           pending: '排队',
           scheduled: '定时',
           retry: '重试',
-          archived: '最终失败',
-          completed: '已完成',
+          todaySuccess: '今日成功',
+          todayFailedAttempts: '今日失败尝试',
+          archived: '历史失败归档',
+          completed: '保留的成功记录',
           latency: '最早等待',
           status: '状态'
         },
@@ -3678,8 +3717,11 @@ export default {
           title: '运行概览',
           active: '运行中',
           pending: '排队中',
+          scheduled: '定时',
           retry: '重试中',
-          archived: '最终失败'
+          todaySuccess: '今日成功',
+          todayFailedAttempts: '今日失败尝试',
+          dailyFormula: "今日成功 = max(今日 processed − 今日 failed, 0)。两项均为当日任务执行次数，包含重试，不是完成的文档数；每日重置。"
         },
         pools: {
           core: '核心解析',
@@ -3971,7 +4013,8 @@ export default {
     truncatedHint: '回答在模型单次输出上限处被截断，以上为截断前已生成的内容',
     rewind: {
       tooltip: '回滚到这里',
-      confirmBody: '将删除此条之后的对话。从用户消息回滚时会删掉该问题本身，并填回输入框。若有可用检查点，工作区会一并回退。此操作不可撤销。',
+      confirmTitle: '回滚到这里？',
+      confirmBody: '此条之后的对话将被删除；从提问回滚时，该问题会填回输入框。有检查点时工作区也会一并回退，操作不可撤销。',
       confirmButton: '回滚',
       cancelButton: '取消',
       success: '已回滚',
@@ -5314,7 +5357,13 @@ export default {
     mcpStale: '需重新同步',
     belongsToKb: '所属知识库：',
     belongsToOrg: '所属空间：',
-    noCompatibleKbForAgent: '当前智能体的工具与作用域内知识库的能力不匹配，暂无可引用的知识库。'
+    noCompatibleKbForAgent: '当前智能体的工具与作用域内知识库的能力不匹配，暂无可引用的知识库。',
+    tag: '标签',
+    searchPlaceholder: '搜索知识库、文件、技能等',
+    searchInGroup: '在{group}中搜索…',
+    typeToSearch: "在 {'@'} 后继续输入以搜索…",
+    viewAll: '查看全部',
+    back: '返回'
   },
   common: {
     add: '添加',
@@ -6235,6 +6284,7 @@ export default {
       skillTranscriptLive: '安装过程',
       skillTranscriptLiveHint: '正在安装，点击查看过程',
       skillTranscriptTitle: '安装过程',
+      skillTranscriptPrompt: '安装指令',
       skillTranscriptHide: '收起安装过程',
       skillGuidance: {
         placeholder: '补充安装说明，例如需要安装的 CLI、安装文档或环境限制',
@@ -6353,6 +6403,7 @@ export default {
       installedCount: '已安装到 {count} 个沙箱',
       installPanelGroup: '已安装',
       installPanelAvailable: '未安装',
+      installAction: '安装',
       viewInstallProgress: '查看进度',
       manageOnSandbox: '管理沙箱「{name}」上的安装',
       manageDrawerDesc: '在沙箱「{name}」上管理启用、变量和卸载。',
@@ -7809,6 +7860,7 @@ export default {
   },
   menu: {
     sessionInProgress: '会话进行中',
+    sessionUnread: '有新回复',
     knowledgeBase: '知识库',
     agents: '智能体',
     artifacts: '产物',
