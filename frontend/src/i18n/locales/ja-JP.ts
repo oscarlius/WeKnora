@@ -324,6 +324,7 @@ export default {
   },
   menu: {
     sessionInProgress: '会話中',
+    sessionUnread: '新しい回答',
     knowledgeBase: 'ナレッジベース',
     agents: 'エージェント',
     artifacts: '成果物',
@@ -1828,6 +1829,7 @@ export default {
       skillTranscriptLive: 'インストールログ',
       skillTranscriptLiveHint: 'インストール中 — クリックで表示',
       skillTranscriptTitle: 'インストールの実行内容',
+      skillTranscriptPrompt: 'インストール指示',
       skillTranscriptHide: 'インストールの実行内容を非表示',
       skillGuidance: {
         placeholder: '必要な CLI、インストール手順、環境の制約などを入力',
@@ -1946,6 +1948,7 @@ export default {
       installedCount: '{count}個のサンドボックスにインストール済み',
       installPanelGroup: 'インストール済み',
       installPanelAvailable: '未インストール',
+      installAction: 'インストール',
       viewInstallProgress: '進捗を表示',
       manageOnSandbox: 'サンドボックス「{name}」でこのスキルを管理',
       manageDrawerDesc: 'サンドボックス「{name}」での有効化、変数、アンインストールを管理します。',
@@ -2804,7 +2807,13 @@ export default {
     mcpStale: '再同期が必要',
     belongsToKb: 'ナレッジベース: ',
     belongsToOrg: '共有スペース: ',
-    noCompatibleKbForAgent: 'このエージェントのツールはスコープ内のナレッジベースの機能と一致しないため、参照できるナレッジベースがありません。'
+    noCompatibleKbForAgent: 'このエージェントのツールはスコープ内のナレッジベースの機能と一致しないため、参照できるナレッジベースがありません。',
+    tag: 'タグ',
+    searchPlaceholder: 'ナレッジ・ファイル等を検索',
+    searchInGroup: '{group}内を検索…',
+    typeToSearch: "{'@'} の後に入力して検索…",
+    viewAll: 'すべて表示',
+    back: '戻る'
   },
   file: {
     upload: 'ファイルをアップロード'
@@ -4085,6 +4094,7 @@ export default {
     truncatedHint: 'モデルの1回あたりの出力上限で回答が途中で打ち切られました。上記は打ち切り前に生成された内容です。',
     rewind: {
       tooltip: 'ここに巻き戻す',
+      confirmTitle: 'ここに巻き戻しますか？',
       confirmBody: 'これより後の会話を削除します。質問から巻き戻すとその質問自体も消え、入力欄に戻します。チェックポイントがあればワークスペースも戻します。この操作は元に戻せません。',
       confirmButton: '巻き戻す',
       cancelButton: 'キャンセル',
@@ -4464,8 +4474,11 @@ export default {
           title: 'ランタイム概要',
           active: '実行中',
           pending: '保留中',
+          scheduled: '予約済み',
           retry: '再試行中',
-          archived: '失敗（停止）'
+          todaySuccess: '本日の成功',
+          todayFailedAttempts: '本日の失敗試行',
+          dailyFormula: "本日の成功 = max(本日の processed − 本日の failed, 0)。再試行を含む当日のタスク実行回数で、完了した文書数ではありません。毎日リセットされます。"
         },
         columns: {
           queue: 'キュー',
@@ -4473,8 +4486,10 @@ export default {
           pending: '保留中',
           scheduled: '予約済み',
           retry: '再試行',
-          archived: '失敗',
-          completed: '完了',
+          todaySuccess: '本日の成功',
+          todayFailedAttempts: '本日の失敗試行',
+          archived: '過去の失敗アーカイブ',
+          completed: '保持された完了レコード',
           latency: '最長待ち時間',
           status: 'ステータス'
         },
@@ -4489,6 +4504,10 @@ export default {
         failedNotice: {
           title: '{count}件の失敗したタスクに対応が必要です',
           description: '下の表で赤い「失敗」の件数を開くと原因を確認できます。原因を解消してから再試行してください。'
+        },
+        history: { title: '保持されたキュー履歴', description: '過去の失敗アーカイブ {archived}件・保持された完了レコード {completed}件。現在の作業ではなく履歴です。' },
+        reparse: {
+          title: '再解析バッチ', description: '追跡グループは固定メンバーを保持します。現在のドキュメント業務状態は別に更新されるため、その後の再解析でグループ数が変わることがあります。', kbFilter: 'ナレッジベースIDで絞り込み', empty: '追跡中の再解析バッチはありません', loadError: '再解析バッチの読み込みに失敗しました', frozenTotal: '{count}件のレコード', previous: '前へ', next: '次へ', allStates: 'すべての状態', stateFilter: 'メンバー状態で絞り込み', membersTitle: 'バッチメンバー · {name}', membersDescription: "登録時のメンバーは固定され、進捗は現在のドキュメント解析状態に従います。完了率は完了数 / 全メンバー数で、失敗と取消は完了に含みません。要約状態は別集計です。後の再構築で進捗は変わります。", membersEmpty: 'この状態のメンバーはいません', membersLoadError: 'バッチメンバーの読み込みに失敗しました', modes: { managed: "管理対象の送信", tracking_only: "追跡のみ" }, columns: { batch: 'バッチ', knowledgeBase: 'ナレッジベース', mode: 'モード', completed: '完了 / 合計', successRatio: "完了率", currentState: '現在の状態' }, members: { columns: { document: 'ドキュメント', batchState: 'バッチ状態', parseState: '解析状態', summaryState: '要約状態', error: '送信エラー' } }, summary: { none: "要約なし", completed: "完了", unknown: "不明", pending: '保留', processing: '処理中', failed: '失敗' }, states: { waiting_start: '開始待ち', queued: 'キュー済み', processing: '処理中', finalizing: '最終処理中', completed: '完了', failed: '失敗', cancelled: '取消', missing: '欠落', submission_failed: '送信失敗', unknown: '不明' }
         },
         tasks: {
           title: 'タスクの詳細 · {queue}',
@@ -5642,6 +5661,9 @@ export default {
     "serverDocumentation": "サーバーの元の説明",
     "noServerDocumentation": "この MCP サーバーの initialize に instructions / serverInfo.description はありません（どちらも任意）。ツールの説明は下の各 description にあります。",
     "policyHint": "ツールの有効化と承認設定は即時保存され、一覧の更新後も維持されます。",
+    "columnTool": "ツール",
+    "columnEnabled": "有効",
+    "columnApproval": "承認",
     "failed": "ツール一覧を読み込めませんでした",
     "setupProgress": "MCP 設定の手順",
     "connection": "接続設定",
@@ -5684,6 +5706,9 @@ export default {
     authTypeApiKey: 'APIキー／トークン',
     authTypeOAuth: 'OAuth 2.0（初回接続時に認可）',
     oauthScopes: 'スコープ（任意、スペース区切り）',
+    oauthClientId: 'クライアント ID（任意）',
+    oauthClientIdDesc: '認可サーバーに事前登録したクライアントを指定します。空欄の場合は動的クライアント登録で自動登録します。クライアント ID を変更する場合はシークレットも更新してください。',
+    oauthClientSecret: 'クライアントシークレット（任意）',
     oauthAuthorization: '認可状態',
     oauthAuthorized: '認可済み',
     oauthRefreshable: 'トークンの有効期限が切れています。次回利用時に自動的に更新されます',
@@ -6301,6 +6326,22 @@ export default {
       script: 'スクリプト',
       instructions: 'スキル説明'
     },
+    attachmentTarget: {
+      list: 'すべての添付ファイル',
+      file: '添付ファイル',
+      images: '{name} の画像',
+      imagesUnnamed: '添付ファイルの画像',
+      image: '{name} の画像 {n}',
+      imageUnnamed: '添付ファイルの画像 {n}'
+    },
+    imageView: {
+      summary: '「{file}」の画像 {numbers} を確認しました（全 {total} 枚）',
+      single: '画像「{file}」を確認しました',
+      descriptionsHeading: 'ビジョンモデルによる画像の説明',
+      imageLabel: '画像 #{n}',
+      noDescription: '説明を生成できませんでした',
+      remaining: '未確認の画像があと {count} 枚あります'
+    },
     sandboxFiles: {
       found: '{count}件のファイルが見つかりました',
       empty: 'ファイルなし',
@@ -6614,6 +6655,13 @@ export default {
       kbMetricRag: 'RAGナレッジベース',
       kbMetricWiki: 'Wikiナレッジベース',
       statusInactive: '選択済みの{count}個のツールは、現在の設定では有効になりません',
+      searchConversations: '過去の会話を検索',
+      searchConversationsDesc: 'ユーザー自身の過去の会話から以前話した内容を探します',
+      groupStored: '保存済み（ここでは提供されていません）',
+      switchManagedDesc: 'このリストではなくエージェントの他の設定で制御されるため、ここでチェックしても有効になりません。チェックを外すと削除されます。',
+      unrecognizedDesc: 'このバージョンにはないツールのため、エージェントは呼び出せません。チェックを外すと削除されます。',
+      keptUnknownWarning: '保存しました。次の保存済みツールはこのバージョンにはないため残しましたが、エージェントは呼び出せません：{names}',
+      droppedWarning: '保存しました。次のツールはエージェントの他の設定で制御されるため、ツールリストから削除しました：{names}',
       effectiveLabel: '有効なツール',
       effectiveDesc: '現在の設定から算出された、エージェントが実際に呼び出せるツールです',
       effectiveEmpty: '利用可能なツールがありません。エージェントは通常のモデル対話にフォールバックします'
